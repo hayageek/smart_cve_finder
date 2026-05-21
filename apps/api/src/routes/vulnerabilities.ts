@@ -4,7 +4,7 @@ import { prisma } from '../db/client.js';
 import { exploitQueue } from '../queues/index.js';
 import { emitActivityEvent } from '../sockets/index.js';
 import { saveFindingArtifacts } from '../services/artifacts.js';
-import { setFindingExploitable } from '../services/findings.js';
+import { getNextUnexploitedFinding, setFindingExploitable } from '../services/findings.js';
 
 const router = Router();
 
@@ -189,6 +189,30 @@ router.delete('/dropped', async (_req, res) => {
   try {
     const { count } = await prisma.vulnerability.deleteMany({ where: { dropped: true } });
     res.json({ ok: true, deleted: count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+const nextUnexploitedQuerySchema = z.object({
+  cwe:            z.string().optional(),
+  repoUrl:        z.string().optional(),
+  org:            z.string().optional(),
+  minSeverity:    z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional(),
+  includeFailed:  z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
+});
+
+router.get('/next-unexploited', async (req, res) => {
+  try {
+    const q = nextUnexploitedQuerySchema.parse(req.query);
+    const result = await getNextUnexploitedFinding({
+      cwe: q.cwe,
+      repoUrl: q.repoUrl,
+      org: q.org,
+      minSeverity: q.minSeverity,
+      includeFailed: q.includeFailed,
+    });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

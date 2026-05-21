@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
   getFindingDetails,
+  getNextUnexploitedFinding,
   searchFindings,
   setFindingExploitable,
 } from '../services/findings.js';
@@ -17,6 +18,7 @@ export function createMcpServer(): McpServer {
       instructions: [
         'MCP server for SecScan vulnerability research.',
         'finding_id is the Vulnerability.id (UUID) shown in the SecScan UI.',
+        'Use get_next_unexploited_finding to claim the next finding with no exploit (IDE workflow).',
         'Use search_findings to discover IDs by cwe_id, repo_url, or org.',
         'Use save_finding_artifacts to persist report.md, payload.py, exploit.py.',
         'Use set_finding_exploitable after analysis (maps to exploitStatus done/failed).',
@@ -38,6 +40,30 @@ export function createMcpServer(): McpServer {
       }
       return {
         content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
+      };
+    },
+  );
+
+  server.tool(
+    'get_next_unexploited_finding',
+    'Get the next vulnerability with no exploit available (exploitStatus null) for IDE research, highest severity first',
+    {
+      cwe_id: z.string().optional().describe('CWE filter, e.g. CWE-94'),
+      repo_url: z.string().optional().describe('Substring match on repo URL'),
+      org: z.string().optional().describe('Git org segment in repo URL'),
+      min_severity: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional(),
+      include_failed: z.boolean().optional().default(false).describe('Also return failed attempts without a successful exploit'),
+    },
+    async ({ cwe_id, repo_url, org, min_severity, include_failed }) => {
+      const result = await getNextUnexploitedFinding({
+        cwe: cwe_id,
+        repoUrl: repo_url,
+        org,
+        minSeverity: min_severity,
+        includeFailed: include_failed,
+      });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     },
   );
@@ -128,6 +154,7 @@ export function createMcpServer(): McpServer {
 
 export const MCP_TOOL_NAMES = [
   'get_finding_details',
+  'get_next_unexploited_finding',
   'search_findings',
   'save_finding_artifacts',
   'set_finding_exploitable',

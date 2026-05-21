@@ -5,6 +5,8 @@ import {
   type ArtifactFilename,
 } from '../lib/artifact-files.js';
 
+const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
+
 export type SearchFindingsParams = {
   cwe?: string;
   repoUrl?: string;
@@ -12,6 +14,15 @@ export type SearchFindingsParams = {
   page?: number;
   pageSize?: number;
   dropped?: 'yes' | 'no' | 'all';
+};
+
+export type NextUnexploitedParams = {
+  cwe?: string;
+  repoUrl?: string;
+  org?: string;
+  minSeverity?: string;
+  /** Include failed attempts (no successful exploit) for IDE re-work. Default false = only never-attempted. */
+  includeFailed?: boolean;
 };
 
 function buildSearchWhere(params: SearchFindingsParams): Record<string, unknown> {
@@ -73,6 +84,83 @@ export async function searchFindings(params: SearchFindingsParams) {
     page,
     pageSize,
     totalPages: Math.ceil(total / pageSize),
+  };
+}
+
+/**
+ * Next confirmed finding with no successful exploit — for IDE-driven research.
+ * Default: exploitStatus is null (never attempted). Optionally includes failed.
+ */
+export async function getNextUnexploitedFinding(params: NextUnexploitedParams = {}) {
+  const where: Record<string, unknown> = {
+    dropped: false,
+    isFalsePositive: false,
+  };
+
+  if (params.includeFailed) {
+    where.OR = [
+      { exploitStatus: null },
+      { exploitStatus: 'failed' },
+    ];
+  } else {
+    where.exploitStatus = null;
+  }
+
+  if (params.cwe) {
+    where.cwe = { contains: params.cwe, mode: 'insensitive' };
+  }
+
+  if (params.minSeverity) {
+    const idx = SEVERITY_ORDER.indexOf(params.minSeverity as (typeof SEVERITY_ORDER)[number]);
+    if (idx >= 0) {
+      where.severity = { in: SEVERITY_ORDER.slice(0, idx + 1) };
+    }
+  }
+
+  const repoFilters: Record<string, unknown>[] = [];
+  if (params.repoUrl) repoFilters.push({ url: { contains: params.repoUrl, mode: 'insensitive' } });
+  if (params.org) repoFilters.push({ url: { contains: `/${params.org}/`, mode: 'insensitive' } });
+  if (repoFilters.length === 1) {
+    where.scanJob = { repo: repoFilters[0] };
+  } else if (repoFilters.length > 1) {
+    where.scanJob = { repo: { AND: repoFilters } };
+  }
+
+  const candidates = await prisma.vulnerability.findMany({
+    where,
+    take: 200,
+    orderBy: [{ cvssScore: 'desc' }, { createdAt: 'asc' }],
+    include: { scanJob: { include: { repo: { select: { url: true } } } } },
+  });
+
+  if (!candidates.length) {
+    return { finding: null, message: 'No unexploited findings match the filters' };
+  }
+
+  const sorted = [...candidates].sort((a, b) => {
+    const sa = SEVERITY_ORDER.indexOf(a.severity as (typeof SEVERITY_ORDER)[number]);
+    const sb = SEVERITY_ORDER.indexOf(b.severity as (typeof SEVERITY_ORDER)[number]);
+    const ai = sa === -1 ? 99 : sa;
+    const bi = sb === -1 ? 99 : sb;
+    if (ai !== bi) return ai - bi;
+    const cvssDiff = (b.cvssScore ?? 0) - (a.cvssScore ?? 0);
+    if (cvssDiff !== 0) return cvssDiff;
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  });
+
+  const v = sorted[0]!;
+  const details = await getFindingDetails(v.id);
+  return {
+    finding: details,
+    summary: {
+      id: v.id,
+      cwe: v.cwe,
+      severity: v.severity,
+      path: v.path,
+      repoUrl: v.scanJob.repo.url,
+      exploitStatus: v.exploitStatus,
+    },
+    remainingApprox: candidates.length - 1,
   };
 }
 
