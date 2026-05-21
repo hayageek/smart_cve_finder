@@ -6,7 +6,11 @@ import {
   searchFindings,
   setFindingExploitable,
 } from '../services/findings.js';
-import { saveFindingArtifacts } from '../services/artifacts.js';
+import {
+  decodeArtifactBase64,
+  saveFindingArtifacts,
+  saveFindingArtifactBuffers,
+} from '../services/artifacts.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer(
@@ -20,7 +24,8 @@ export function createMcpServer(): McpServer {
         'finding_id is the Vulnerability.id (UUID) shown in the SecScan UI.',
         'Use get_next_unexploited_finding to claim the next finding with no exploit (IDE workflow).',
         'Use search_findings to discover IDs by cwe_id, repo_url, or org.',
-        'Use save_finding_artifacts to persist report.md, payload.py, exploit.py.',
+        'Use save_finding_artifacts with full file TEXT (not host paths). Prefer report_md_base64 for large files.',
+        'Files are written under REPORTS_DIR on the API server (Docker volume), not on your laptop path.',
         'Use set_finding_exploitable after analysis (maps to exploitStatus done/failed).',
       ].join(' '),
     },
@@ -95,20 +100,52 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'save_finding_artifacts',
-    'Save IDE-generated report.md, payload.py, and/or exploit.py to the reports folder for a finding',
+    'Upload report.md, payload.py, and/or exploit.py file CONTENTS to the API server (writes into Docker REPORTS_DIR). Do not pass host file paths.',
     {
       finding_id: z.string().describe('Vulnerability.id (UUID)'),
-      report_md: z.string().optional().describe('Markdown report content'),
-      payload_py: z.string().optional().describe('payload.py content'),
-      exploit_py: z.string().optional().describe('exploit.py content'),
+      report_md: z.string().optional().describe('Full markdown text of report.md'),
+      payload_py: z.string().optional().describe('Full Python source of payload.py'),
+      exploit_py: z.string().optional().describe('Full Python source of exploit.py'),
+      report_md_base64: z.string().optional().describe('Base64-encoded report.md'),
+      payload_py_base64: z.string().optional().describe('Base64-encoded payload.py'),
+      exploit_py_base64: z.string().optional().describe('Base64-encoded exploit.py'),
     },
-    async ({ finding_id, report_md, payload_py, exploit_py }) => {
+    async ({
+      finding_id,
+      report_md,
+      payload_py,
+      exploit_py,
+      report_md_base64,
+      payload_py_base64,
+      exploit_py_base64,
+    }) => {
       try {
-        const saved = await saveFindingArtifacts(finding_id, {
-          reportMd: report_md,
-          payloadPy: payload_py,
-          exploitPy: exploit_py,
-        });
+        const hasB64 =
+          report_md_base64 !== undefined ||
+          payload_py_base64 !== undefined ||
+          exploit_py_base64 !== undefined;
+
+        let saved;
+        if (hasB64) {
+          const buffers: Parameters<typeof saveFindingArtifactBuffers>[1] = {};
+          if (report_md_base64 !== undefined) {
+            buffers.reportMd = decodeArtifactBase64(report_md_base64);
+          }
+          if (payload_py_base64 !== undefined) {
+            buffers.payloadPy = decodeArtifactBase64(payload_py_base64);
+          }
+          if (exploit_py_base64 !== undefined) {
+            buffers.exploitPy = decodeArtifactBase64(exploit_py_base64);
+          }
+          saved = await saveFindingArtifactBuffers(finding_id, buffers);
+        } else {
+          saved = await saveFindingArtifacts(finding_id, {
+            reportMd: report_md,
+            payloadPy: payload_py,
+            exploitPy: exploit_py,
+          });
+        }
+
         if (!saved) {
           return {
             content: [{ type: 'text', text: JSON.stringify({ error: 'Finding not found' }) }],

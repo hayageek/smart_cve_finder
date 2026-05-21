@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { prisma } from '../db/client.js';
 import { config } from '../config.js';
+import { resolveArtifactPath, type ArtifactFilename } from '../lib/artifact-files.js';
 import { buildMcpConfigPayload } from '../lib/mcp-config.js';
 import { scanQueue, cveQueue, exploitQueue } from '../queues/index.js';
 
@@ -62,11 +63,14 @@ router.post('/clear', async (req, res) => {
           where: { exploitStatus: { not: null } },
           select: { id: true, reportPath: true, exploitPath: true, payloadPath: true },
         });
+        const names: ArtifactFilename[] = ['report.md', 'exploit.py', 'payload.py'];
         for (const v of vulns) {
-          for (const p of [v.reportPath, v.exploitPath, v.payloadPath]) {
+          const stored = [v.reportPath, v.exploitPath, v.payloadPath];
+          for (let i = 0; i < names.length; i++) {
+            const p = stored[i];
             if (!p) continue;
-            const abs = path.isAbsolute(p) ? p : path.join(config.REPORTS_DIR, p);
-            if (fs.existsSync(abs)) fs.rmSync(abs, { force: true });
+            const abs = resolveArtifactPath(v.id, names[i]!, p);
+            if (abs) fs.rmSync(abs, { force: true });
           }
         }
         await prisma.vulnerability.updateMany({

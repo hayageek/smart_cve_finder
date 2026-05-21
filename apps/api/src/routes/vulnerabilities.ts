@@ -1,10 +1,19 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import { exploitQueue } from '../queues/index.js';
 import { emitActivityEvent } from '../sockets/index.js';
-import { saveFindingArtifacts } from '../services/artifacts.js';
+import {
+  saveFindingArtifacts,
+  saveFindingArtifactBuffers,
+} from '../services/artifacts.js';
 import { getNextUnexploitedFinding, setFindingExploitable } from '../services/findings.js';
+
+const artifactUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+});
 
 const router = Router();
 
@@ -239,6 +248,65 @@ router.post('/dropped/:id/promote', async (req, res) => {
     res.json({ id: updated.id, dropped: updated.dropped });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+const artifactsBodySchema = z.object({
+  reportMd:  z.string().optional(),
+  payloadPy: z.string().optional(),
+  exploitPy: z.string().optional(),
+});
+
+router.post(
+  '/:id/artifacts/upload',
+  artifactUpload.fields([
+    { name: 'report_md', maxCount: 1 },
+    { name: 'payload_py', maxCount: 1 },
+    { name: 'exploit_py', maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const files = req.files as
+        | Record<string, { buffer: Buffer }[]>
+        | undefined;
+      const buffers: Parameters<typeof saveFindingArtifactBuffers>[1] = {};
+      if (files?.report_md?.[0]) buffers.reportMd = files.report_md[0].buffer;
+      if (files?.payload_py?.[0]) buffers.payloadPy = files.payload_py[0].buffer;
+      if (files?.exploit_py?.[0]) buffers.exploitPy = files.exploit_py[0].buffer;
+
+      const saved = await saveFindingArtifactBuffers(req.params.id, buffers);
+      if (!saved) return res.status(404).json({ error: 'Not found' });
+      res.json(saved);
+    } catch (err) {
+      res.status(400).json({ error: String(err) });
+    }
+  },
+);
+
+router.post('/:id/artifacts', async (req, res) => {
+  try {
+    const body = artifactsBodySchema.parse(req.body);
+    const saved = await saveFindingArtifacts(req.params.id, body);
+    if (!saved) return res.status(404).json({ error: 'Not found' });
+    res.json(saved);
+  } catch (err) {
+    res.status(400).json({ error: String(err) });
+  }
+});
+
+const exploitStatusSchema = z.object({
+  exploitable: z.boolean(),
+  note:        z.string().optional(),
+});
+
+router.patch('/:id/exploit-status', async (req, res) => {
+  try {
+    const body = exploitStatusSchema.parse(req.body);
+    const updated = await setFindingExploitable(req.params.id, body.exploitable, body.note);
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: String(err) });
   }
 });
 
