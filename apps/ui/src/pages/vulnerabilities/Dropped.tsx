@@ -19,11 +19,20 @@ export default function Dropped() {
   const qc = useQueryClient();
   const [page, setPage] = useState(1);
   const [dropReason, setDropReason] = useState('');
+  const [cwe, setCwe] = useState('');
+  const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dropped-vulns', page, dropReason, search],
-    queryFn: () => api.getDroppedVulns({ page, pageSize: 20, dropReason, repoUrl: search }),
+    queryKey: ['dropped-vulns', page, dropReason, cwe, vulnType, search],
+    queryFn: () => api.getDroppedVulns({
+      page,
+      pageSize: 20,
+      dropReason,
+      repoUrl: search,
+      ...(cwe ? { cwe } : {}),
+      ...(vulnType ? { vulnType } : {}),
+    }),
     placeholderData: (prev) => prev,
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
 
@@ -91,6 +100,8 @@ export default function Dropped() {
       <div className="space-y-4">
         <div className="flex gap-2 flex-wrap">
           <Input placeholder="Filter by repo..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="max-w-xs" />
+          <Input placeholder="Filter by CWE..." value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="max-w-[140px]" />
+          <Input placeholder="Filter by type..." value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="max-w-[160px]" />
           <Select value={dropReason} onChange={(e) => { setDropReason(e.target.value); setPage(1); }}>
             <option value="">All reasons</option>
             {DROP_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}

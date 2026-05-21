@@ -26,6 +26,40 @@ const log = createWorkerLogger('scanner');
 const cveQueue = new Queue<CveJobData>(QUEUE_NAMES.CVE_SCAN, { connection: redisOptions });
 const exploitQueue = new Queue<ExploitJobData>(QUEUE_NAMES.EXPLOIT_GEN, { connection: redisOptions });
 
+/** Common vulnerability columns shared by confirmed and dropped findings. */
+function vulnRowFromScan(fields: {
+  checkId: string;
+  path: string;
+  lineStart: number;
+  lineEnd: number | null;
+  severity: string;
+  cwe: string;
+  vulnType: string | null;
+  message: string | null;
+  metadataJson: object;
+}) {
+  return {
+    checkId: fields.checkId,
+    path: fields.path,
+    lineStart: fields.lineStart,
+    lineEnd: fields.lineEnd,
+    severity: fields.severity,
+    cwe: fields.cwe,
+    vulnType: fields.vulnType,
+    message: fields.message,
+    metadataJson: fields.metadataJson,
+    cvssScore: CWE_CVSS_MAP[fields.cwe] ?? null,
+  };
+}
+
+function metadataFromDropped(d: DroppedFinding): object {
+  if (d.metadata) return d.metadata as object;
+  return {
+    cwe: d.cwe ?? 'UNKNOWN',
+    ...(d.vulnerability_type ? { vulnerability_type: d.vulnerability_type } : {}),
+  };
+}
+
 // ── Clone worker ──────────────────────────────────────────────────
 
 export const scanWorker = new Worker<ScanJobData>(
@@ -217,22 +251,23 @@ export const cveWorker = new Worker<CveJobData>(
           data: {
             id: uuidv7(),
             scanJobId,
-            checkId: f.check_id,
-            path: f.path,
-            lineStart: f.start.line,
-            lineEnd: f.end.line,
-            severity: f.extra.severity,
-            cwe: f.extra.metadata.cwe,
-            vulnType: f.extra.metadata.vulnerability_type,
-            message: f.extra.message,
-            metadataJson: f.extra.metadata as object,
-            cvssScore: CWE_CVSS_MAP[f.extra.metadata.cwe] ?? null,
+            ...vulnRowFromScan({
+              checkId: f.check_id,
+              path: f.path,
+              lineStart: f.start.line,
+              lineEnd: f.end.line,
+              severity: f.extra.severity,
+              cwe: f.extra.metadata.cwe,
+              vulnType: f.extra.metadata.vulnerability_type,
+              message: f.extra.message,
+              metadataJson: f.extra.metadata as object,
+            }),
           },
         }),
       ),
     );
 
-    // Persist dropped findings in the same table with dropped=true
+    // Persist dropped findings in the same table with dropped=true (+ dropReason, dropEvidence)
     const droppedVulns = await Promise.all(
       drops.map((d) => {
         const cwe = d.cwe ?? 'UNKNOWN';
@@ -240,16 +275,17 @@ export const cveWorker = new Worker<CveJobData>(
           data: {
             id: uuidv7(),
             scanJobId,
-            checkId: d.check_id,
-            path: d.path,
-            lineStart: d.line ?? 0,
-            lineEnd: d.line_end ?? null,
-            severity: d.severity ?? 'LOW',
-            cwe,
-            vulnType: d.vulnerability_type ?? null,
-            message: d.message ?? null,
-            metadataJson: (d.metadata as object) ?? null,
-            cvssScore: CWE_CVSS_MAP[cwe] ?? null,
+            ...vulnRowFromScan({
+              checkId: d.check_id,
+              path: d.path,
+              lineStart: d.line ?? 0,
+              lineEnd: d.line_end ?? null,
+              severity: d.severity ?? 'LOW',
+              cwe,
+              vulnType: d.vulnerability_type ?? null,
+              message: d.message ?? null,
+              metadataJson: metadataFromDropped(d),
+            }),
             dropped: true,
             dropReason: d.drop_reason,
             dropEvidence: d.drop_evidence,

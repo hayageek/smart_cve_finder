@@ -7,7 +7,7 @@ import { Input } from '../components/ui/Input.tsx';
 import { Select } from '../components/ui/Select.tsx';
 import { Tabs } from '../components/ui/Tabs.tsx';
 import { ConfirmDialog } from '../components/ui/Dialog.tsx';
-import { api } from '../lib/api.ts';
+import { api, type McpConfigResponse } from '../lib/api.ts';
 import type { WorkerConfig } from '@secscan/shared';
 
 const CLEAR_TARGETS = [
@@ -21,6 +21,97 @@ const CLEAR_TARGETS = [
   { key: 'repos', label: 'All Repositories', color: 'destructive' },
   { key: 'everything', label: 'Reset Everything (nuclear)', color: 'destructive' },
 ] as const;
+
+function CopyBlock({ label, json, steps }: { label: string; json: string; steps: string[] }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(json);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <CardTitle className="text-base">{label}</CardTitle>
+        <Button size="sm" variant="outline" onClick={copy}>
+          {copied ? 'Copied' : 'Copy JSON'}
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <ol className="list-decimal list-inside text-sm text-muted-foreground space-y-1">
+          {steps.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ol>
+        <pre className="text-xs font-mono bg-muted rounded-md p-3 overflow-x-auto max-h-64">{json}</pre>
+      </CardContent>
+    </Card>
+  );
+}
+
+function McpTab() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['mcp-config'],
+    queryFn: () => api.getMcpConfig(),
+  });
+
+  if (isLoading) return <p className="text-sm text-muted-foreground">Loading MCP configuration…</p>;
+  if (error) return <p className="text-sm text-destructive">Failed to load MCP config: {String(error)}</p>;
+  if (!data) return null;
+
+  return <McpTabContent config={data} />;
+}
+
+function McpTabContent({ config }: { config: McpConfigResponse }) {
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div className="flex flex-wrap gap-2">
+        <span className={`text-xs px-2 py-1 rounded-full border ${config.enabled ? 'bg-green-500/10 border-green-500/30' : 'bg-muted border-border'}`}>
+          MCP {config.enabled ? 'enabled' : 'disabled'}
+        </span>
+        <span className={`text-xs px-2 py-1 rounded-full border ${config.apiKeyConfigured ? 'bg-green-500/10 border-green-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
+          API key {config.apiKeyConfigured ? 'configured' : 'missing'}
+        </span>
+        <span className="text-xs px-2 py-1 rounded-full border border-border bg-muted font-mono">
+          {config.mcpUrl}
+        </span>
+      </div>
+
+      {!config.enabled && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          Set <code className="font-mono text-xs">MCP_ENABLED=true</code> in the API <code className="font-mono text-xs">.env</code> and restart the API container.
+        </p>
+      )}
+      {!config.apiKeyConfigured && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          Set <code className="font-mono text-xs">MCP_API_KEY</code> in the API <code className="font-mono text-xs">.env</code>, export the same value as{' '}
+          <code className="font-mono text-xs">MCP_API_KEY</code> in your shell for Cursor/Claude config interpolation.
+        </p>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">MCP tools</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="list-disc list-inside text-sm space-y-1 font-mono">
+            {config.tools.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+
+      <CopyBlock label="Cursor" json={config.cursorJson} steps={config.setupSteps.cursor} />
+
+      <CopyBlock label="Claude Desktop" json={config.claudeJson} steps={[
+        ...config.setupSteps.claude,
+        'macOS config: ~/Library/Application Support/Claude/claude_desktop_config.json',
+        'Windows config: %APPDATA%\\Claude\\claude_desktop_config.json',
+      ]} />
+    </div>
+  );
+}
 
 function GeneralTab() {
   const { data: env } = useQuery({ queryKey: ['env-config'], queryFn: () => api.getEnvConfig() });
@@ -180,6 +271,7 @@ export default function Settings() {
       <Tabs
         tabs={[
           { id: 'general', label: 'General', content: <GeneralTab /> },
+          { id: 'mcp', label: 'MCP Integration', content: <McpTab /> },
           { id: 'scanner', label: 'Scanner', content: <ScannerTab /> },
           { id: 'notifications', label: 'Notifications', content: <NotificationsTab /> },
           { id: 'data', label: 'Data Management', content: <DataManagementTab /> },

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import { exploitQueue } from '../queues/index.js';
 import { emitActivityEvent } from '../sockets/index.js';
+import { saveFindingArtifacts } from '../services/artifacts.js';
+import { setFindingExploitable } from '../services/findings.js';
 
 const router = Router();
 
@@ -13,7 +15,9 @@ const vulnQuerySchema = z.object({
   pageSize:       z.coerce.number().min(1).max(100).default(20),
   severity:       z.string().optional(),
   cwe:            z.string().optional(),
+  vulnType:       z.string().optional(),
   repoUrl:        z.string().optional(),
+  org:            z.string().optional(),
   exploited:      z.enum(['yes', 'no']).optional(),
   /** Successful exploit generated (exploitStatus === done). */
   exploitable:    z.enum(['yes', 'no']).optional(),
@@ -38,6 +42,7 @@ router.get('/', async (req, res) => {
 
     if (q.severity)      where.severity = { in: q.severity.split(',') };
     if (q.cwe)           where.cwe = { contains: q.cwe, mode: 'insensitive' };
+    if (q.vulnType)      where.vulnType = { contains: q.vulnType, mode: 'insensitive' };
     if (q.falsePositive === 'yes') where.isFalsePositive = true;
     if (q.falsePositive === 'no')  where.isFalsePositive = false;
     if (q.exploited === 'yes') where.exploitStatus = { not: null };
@@ -51,8 +56,13 @@ router.get('/', async (req, res) => {
         ...(q.dateTo   ? { lte: new Date(q.dateTo) }   : {}),
       };
     }
-    if (q.repoUrl) {
-      where.scanJob = { repo: { url: { contains: q.repoUrl, mode: 'insensitive' } } };
+    const repoFilters: Record<string, unknown>[] = [];
+    if (q.repoUrl) repoFilters.push({ url: { contains: q.repoUrl, mode: 'insensitive' } });
+    if (q.org) repoFilters.push({ url: { contains: `/${q.org}/`, mode: 'insensitive' } });
+    if (repoFilters.length === 1) {
+      where.scanJob = { repo: repoFilters[0] };
+    } else if (repoFilters.length > 1) {
+      where.scanJob = { repo: { AND: repoFilters } };
     }
 
     const [vulns, total] = await Promise.all([
@@ -105,6 +115,8 @@ const droppedQuerySchema = z.object({
   page:       z.coerce.number().min(1).default(1),
   pageSize:   z.coerce.number().min(1).max(100).default(20),
   dropReason: z.string().optional(),
+  cwe:        z.string().optional(),
+  vulnType:   z.string().optional(),
   repoUrl:    z.string().optional(),
 });
 
@@ -144,6 +156,8 @@ router.get('/dropped', async (req, res) => {
     const q = droppedQuerySchema.parse(req.query);
     const where: Record<string, unknown> = { dropped: true };
     if (q.dropReason) where.dropReason = q.dropReason;
+    if (q.cwe)        where.cwe = { contains: q.cwe, mode: 'insensitive' };
+    if (q.vulnType)   where.vulnType = { contains: q.vulnType, mode: 'insensitive' };
     if (q.repoUrl) {
       where.scanJob = { repo: { url: { contains: q.repoUrl, mode: 'insensitive' } } };
     }
@@ -188,7 +202,7 @@ router.post('/dropped/:id/promote', async (req, res) => {
 
     const updated = await prisma.vulnerability.update({
       where: { id: req.params.id },
-      data: { dropped: false, dropReason: null, dropEvidence: null },
+      data: { dropped: false },
     });
 
     emitActivityEvent({
@@ -241,7 +255,7 @@ router.patch('/:id/promote', async (req, res) => {
 
     const updated = await prisma.vulnerability.update({
       where: { id: req.params.id },
-      data: { dropped: false, dropReason: null, dropEvidence: null },
+      data: { dropped: false },
     });
 
     emitActivityEvent({

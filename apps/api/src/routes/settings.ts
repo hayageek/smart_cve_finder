@@ -4,12 +4,17 @@ import path from 'path';
 import fs from 'fs';
 import { prisma } from '../db/client.js';
 import { config } from '../config.js';
+import { buildMcpConfigPayload } from '../lib/mcp-config.js';
 import { scanQueue, cveQueue, exploitQueue } from '../queues/index.js';
 
 const router = Router();
 
 const MASKED = '***';
 const SENSITIVE = ['POSTGRES_PASSWORD', 'REDIS_PASSWORD', 'DATABASE_URL'];
+
+router.get('/mcp-config', (_req, res) => {
+  res.json(buildMcpConfigPayload());
+});
 
 router.get('/env', (_req, res) => {
   const safe: Record<string, string> = {};

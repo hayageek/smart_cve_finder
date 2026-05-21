@@ -13,6 +13,7 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "@prisma/client": "^5.14.0",
     "@secscan/shared": "*",
     "archiver": "^7.0.1",

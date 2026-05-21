@@ -27,6 +27,7 @@ import exploitsRouter from './routes/exploits.js';
 import workersRouter from './routes/workers.js';
 import settingsRouter from './routes/settings.js';
 import dashboardRouter from './routes/dashboard.js';
+import { mountMcpRoutes } from './mcp/mount.js';
 
 async function bootstrap() {
   await mkdir(config.WORKSPACES_DIR, { recursive: true });
@@ -39,6 +40,8 @@ async function bootstrap() {
 
   app.use(cors({ origin: config.CORS_ORIGINS.split(',') }));
   app.use(express.json({ limit: '10mb' }));
+
+  mountMcpRoutes(app);
 
   app.use('/api/repos', reposRouter);
   app.use('/api/scans', scansRouter);

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "secscan": {
+      "url": "http://localhost:4000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:MCP_API_KEY}"
+      }
+    }
+  }
+}

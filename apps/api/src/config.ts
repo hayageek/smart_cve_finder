@@ -29,6 +29,11 @@ const schema = z.object({
   NOTIFY_WEBHOOK_URL: z.string().optional(),
   NOTIFY_ON_CRITICAL: z.string().transform((v) => v !== 'false').default('true'),
   NOTIFY_ON_SCAN_COMPLETE: z.string().transform((v) => v === 'true').default('false'),
+  MCP_ENABLED: z.string().transform((v) => v === 'true').default('false'),
+  MCP_API_KEY: z.string().optional(),
+  MCP_PATH: z.string().default('/mcp'),
+  MCP_PUBLIC_URL: z.string().optional(),
+  MCP_SERVER_NAME: z.string().default('secscan'),
 });
 
 const parsed = schema.safeParse(process.env);

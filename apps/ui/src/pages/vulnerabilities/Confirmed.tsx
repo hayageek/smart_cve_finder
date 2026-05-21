@@ -28,11 +28,12 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
   const [downloading, setDownloading] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const meta = vuln.metadataJson as {
+  const meta = (vuln.metadataJson ?? {}) as {
     dataflow_steps?: string[]; confidence_reasons?: string[];
     trust_boundary?: string; requires_auth?: string; requires_misconfig?: boolean;
     source_location?: string; sink_location?: string; confidence?: string;
   };
+  const hasMetaContext = !!(meta.requires_auth || meta.requires_misconfig != null || meta.trust_boundary);
 
   const fpMutation = useMutation({
     mutationFn: (val: boolean) => api.setFalsePositive(vuln.id, val),
@@ -107,6 +108,23 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
           <p className="text-xs text-muted-foreground">Message</p>
           <p className="text-xs">{vuln.message}</p>
         </div>
+        {(vuln.dropReason || vuln.dropEvidence) && (
+          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">Drop info</p>
+            {vuln.dropReason && (
+              <div>
+                <p className="text-xs text-muted-foreground">Drop Reason</p>
+                <Badge variant="secondary" className="mt-0.5">{vuln.dropReason}</Badge>
+              </div>
+            )}
+            {vuln.dropEvidence && (
+              <div>
+                <p className="text-xs text-muted-foreground">Drop Evidence</p>
+                <p className="text-xs break-words">{vuln.dropEvidence}</p>
+              </div>
+            )}
+          </div>
+        )}
         {meta.source_location && (
           <div>
             <p className="text-xs text-muted-foreground">Source → Sink</p>
@@ -137,11 +155,13 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
             ))}
           </div>
         )}
-        <div className="grid grid-cols-3 gap-1 text-xs">
-          <div><p className="text-muted-foreground">Auth</p><p>{meta.requires_auth}</p></div>
-          <div><p className="text-muted-foreground">Misconfig</p><p>{meta.requires_misconfig ? 'Yes' : 'No'}</p></div>
-          <div><p className="text-muted-foreground">Boundary</p><p>{meta.trust_boundary}</p></div>
-        </div>
+        {hasMetaContext && (
+          <div className="grid grid-cols-3 gap-1 text-xs">
+            <div><p className="text-muted-foreground">Auth</p><p>{meta.requires_auth ?? '—'}</p></div>
+            <div><p className="text-muted-foreground">Misconfig</p><p>{meta.requires_misconfig ? 'Yes' : 'No'}</p></div>
+            <div><p className="text-muted-foreground">Boundary</p><p>{meta.trust_boundary ?? '—'}</p></div>
+          </div>
+        )}
         <div className="border-t border-border pt-3 space-y-2">
           {hasArtifacts && (
             <div className="space-y-2">
@@ -224,17 +244,21 @@ export default function Confirmed() {
   const [page, setPage] = useState(1);
   const [severity, setSeverity] = useState('');
   const [exploitable, setExploitable] = useState('');
+  const [cwe, setCwe] = useState('');
+  const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<ApiVulnerability | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['vulns', page, severity, exploitable, search],
+    queryKey: ['vulns', page, severity, exploitable, cwe, vulnType, search],
     queryFn: () => api.getVulnerabilities({
       page,
       pageSize: 20,
       severity,
       repoUrl: search,
       ...(exploitable ? { exploitable } : {}),
+      ...(cwe ? { cwe } : {}),
+      ...(vulnType ? { vulnType } : {}),
     }),
     placeholderData: (prev) => prev,
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
@@ -273,6 +297,8 @@ export default function Confirmed() {
       <div className="space-y-4">
         <div className="flex gap-2 flex-wrap">
           <Input placeholder="Filter by repo..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="max-w-xs" />
+          <Input placeholder="Filter by CWE..." value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="max-w-[140px]" />
+          <Input placeholder="Filter by type..." value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="max-w-[160px]" />
           <Select value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }}>
             <option value="">All severities</option>
             {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => <option key={s} value={s}>{s}</option>)}

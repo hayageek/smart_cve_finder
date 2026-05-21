@@ -1,5 +1,18 @@
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
+export type McpConfigResponse = {
+  enabled: boolean;
+  apiKeyConfigured: boolean;
+  publicBaseUrl: string;
+  mcpPath: string;
+  mcpUrl: string;
+  serverName: string;
+  tools: string[];
+  cursorJson: string;
+  claudeJson: string;
+  setupSteps: { cursor: string[]; claude: string[] };
+};
+
 /** URL for rendered report.md in the browser (HTML). */
 export function exploitReportViewUrl(vulnId: string): string {
   return `${BASE}/api/exploits/${vulnId}/report/view`;
@@ -100,6 +113,7 @@ export const api = {
   clearWorkerLogs: () => request<unknown>('/api/workers/logs', { method: 'DELETE' }),
 
   // Settings
+  getMcpConfig: () => request<McpConfigResponse>('/api/settings/mcp-config'),
   getEnvConfig: () => request<Record<string, string>>('/api/settings/env'),
   clearData: (target: string) =>
     request<unknown>('/api/settings/clear', { method: 'POST', body: JSON.stringify({ target }) }),
