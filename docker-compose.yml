@@ -1,0 +1,102 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-secscan}
+      POSTGRES_USER: ${POSTGRES_USER:-secscan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-secscan}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./volumes/redis:/data
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-secscan}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-secscan}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      WORKSPACES_DIR: /data/workspaces
+      REPORTS_DIR: /data/atlassian_reports
+      LOGS_DIR: /data/logs
+    volumes:
+      - ./volumes/workspaces:/data/workspaces
+      - ./volumes/atlassian_reports:/data/atlassian_reports
+      - ./volumes/logs:/data/logs
+    ports:
+      - '4000:4000'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  workers:
+    build:
+      context: .
+      dockerfile: apps/workers/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-secscan}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-secscan}
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+      WORKSPACES_DIR: /data/workspaces
+      REPORTS_DIR: /data/atlassian_reports
+      LOGS_DIR: /data/logs
+      CURSOR_API_KEY: ${CURSOR_API_KEY}
+      CURSOR_AGENT_BIN: /usr/local/bin/cursor-agent
+      DEBUG_CURSOR: ${DEBUG_CURSOR:-true}
+      SKILLS_DIR: /data/skills
+    volumes:
+      - ./volumes/workspaces:/data/workspaces
+      - ./volumes/atlassian_reports:/data/atlassian_reports
+      - ./volumes/logs:/data/logs
+      - ./skills:/data/skills:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+      args:
+        # Empty = same-origin /api and /socket.io (proxied by nginx to the API service)
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_SOCKET_URL: ${VITE_SOCKET_URL:-}
+    restart: unless-stopped
+    ports:
+      - '3000:80'
+    depends_on:
+      - api

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+*.log
+volumes/postgres/
+volumes/redis/
+volumes/workspaces/
+volumes/atlassian_reports/
+volumes/logs/
+!volumes/**/.gitkeep
+.DS_Store
+data/
+skills

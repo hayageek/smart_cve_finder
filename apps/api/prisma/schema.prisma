@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Repo {
+  id             String    @id @default(cuid())
+  // Canonical unique key per scannable artifact:
+  //   git repos  → clone URL as-is   e.g. https://github.com/org/repo
+  //   packages   → {type}:{name}     e.g. npm:express
+  //              → {type}:{name}@{v} e.g. npm:express@4.17.21  (version-pinned)
+  //                                       pip:requests@2.31.0
+  url            String    @unique
+  // Discovered git repository URL from npm/pip registry metadata (null for git repos)
+  repoUrl        String?
+  // Package-specific fields (null for git repos)
+  packageName    String?
+  packageType    String    @default("git")   // git | npm | pip
+  packageVersion String?                     // resolved version after download
+  provider       String    // github | bitbucket | gitlab | npm | pypi | other
+  isPrivate      Boolean   @default(false)
+  status         String    @default("queued")
+  lastScannedAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  scanJobs       ScanJob[]
+
+  @@index([status])
+  @@index([packageType])
+  @@index([provider])
+  @@index([isPrivate])
+}
+
+model ScanJob {
+  id           String          @id @default(cuid())
+  repoId       String
+  repo         Repo            @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  bullJobId    String?
+  status       String          @default("pending")
+  stage        String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  error        String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  vulnerabilities Vulnerability[]
+
+  @@index([repoId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Vulnerability {
+  id              String    @id
+  scanJobId       String
+  scanJob         ScanJob   @relation(fields: [scanJobId], references: [id], onDelete: Cascade)
+  checkId         String
+  path            String
+  lineStart       Int
+  lineEnd         Int?
+  severity        String
+  cwe             String
+  vulnType        String?
+  message         String?
+  metadataJson    Json?
+  isFalsePositive Boolean   @default(false)
+  cvssScore       Float?
+
+  // dropped=true when the CVE hunter intentionally excluded this finding
+  dropped         Boolean   @default(false)
+  dropReason      String?
+  dropEvidence    String?
+
+  // exploit lifecycle — null means not yet attempted
+  exploitStatus   String?   // pending | generating | done | failed
+  reportPath      String?
+  exploitPath     String?
+  payloadPath     String?
+  exploitError    String?
+  exploitAttempts Int?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([scanJobId])
+  @@index([severity])
+  @@index([cwe])
+  @@index([isFalsePositive])
+  @@index([dropped])
+  @@index([exploitStatus])
+}
+
+model WorkerConfig {
+  id                    String   @id @default(cuid())
+  scannerConcurrency    Int      @default(3)
+  exploitConcurrency    Int      @default(2)
+  exploitMinSeverity    String   @default("HIGH")
+  exploitIncludeDropped Boolean  @default(false)
+  dedupWindowHours      Int      @default(24)
+  workspaceCleanupHours Int      @default(48)
+  notifyWebhookUrl      String?
+  notifyOnCritical      Boolean  @default(true)
+  notifyOnScanComplete  Boolean  @default(false)
+  updatedAt             DateTime @updatedAt
+}

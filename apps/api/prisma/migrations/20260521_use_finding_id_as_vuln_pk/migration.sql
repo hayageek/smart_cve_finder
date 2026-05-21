@@ -1,0 +1,9 @@
+-- Use finding_id (from the CVE-hunter skill) as the Vulnerability primary key.
+--
+-- Prisma's @default(cuid()) is generated at the application layer, not as a
+-- database DEFAULT clause, so no DDL is required here.  This migration records
+-- the schema intent change: the application now always provides the id
+-- (finding_id or a deterministic SHA-256 fallback) instead of letting Prisma
+-- generate a random cuid.
+--
+-- Existing rows are unaffected; their ids remain valid string PKs.
