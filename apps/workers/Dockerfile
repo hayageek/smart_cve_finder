@@ -22,7 +22,7 @@ FROM node:24-slim AS runner
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git openssl ca-certificates \
+    git openssl ca-certificates unzip tar \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=base /app/node_modules ./node_modules
