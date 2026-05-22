@@ -9,6 +9,7 @@ import {
   saveFindingArtifactBuffers,
 } from '../services/artifacts.js';
 import { getNextUnexploitedFinding, setFindingExploitable } from '../services/findings.js';
+import type { PackageType } from '@secscan/shared';
 
 const artifactUpload = multer({
   storage: multer.memoryStorage(),
@@ -58,7 +59,14 @@ router.get('/', async (req, res) => {
     if (q.exploited === 'no')  where.exploitStatus = null;
     if (q.exploitable === 'yes') where.exploitStatus = 'done';
     if (q.exploitable === 'no') where.exploitStatus = { not: 'done' };
-    if (q.exploitStatus) where.exploitStatus = q.exploitStatus;
+    // Special values: 'none' → never attempted (null), 'in_progress' → pending or generating
+    if (q.exploitStatus === 'none') {
+      where.exploitStatus = null;
+    } else if (q.exploitStatus === 'in_progress') {
+      where.exploitStatus = { in: ['pending', 'generating'] };
+    } else if (q.exploitStatus) {
+      where.exploitStatus = q.exploitStatus;
+    }
     if (q.dateFrom || q.dateTo) {
       where.createdAt = {
         ...(q.dateFrom ? { gte: new Date(q.dateFrom) } : {}),
@@ -80,7 +88,7 @@ router.get('/', async (req, res) => {
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
         orderBy: { [q.sortBy]: q.sortDir },
-        include: { scanJob: { include: { repo: { select: { url: true } } } } },
+        include: { scanJob: { include: { repo: { select: { url: true, repoUrl: true, tarballUrl: true } } } } },
       }),
       prisma.vulnerability.count({ where }),
     ]);
@@ -89,6 +97,8 @@ router.get('/', async (req, res) => {
       id:             v.id,
       scanJobId:      v.scanJobId,
       repoUrl:        v.scanJob.repo.url,
+      packageRepoUrl: v.scanJob.repo.repoUrl,
+      packageTarballUrl: v.scanJob.repo.tarballUrl,
       checkId:        v.checkId,
       path:           v.path,
       lineStart:      v.lineStart,
@@ -129,13 +139,17 @@ const droppedQuerySchema = z.object({
   repoUrl:    z.string().optional(),
 });
 
-function mapVulnRow(v: Awaited<ReturnType<typeof prisma.vulnerability.findMany>>[number] & {
-  scanJob: { repo: { url: string } };
-}) {
+type VulnWithRepo = Awaited<ReturnType<typeof prisma.vulnerability.findMany<{
+  include: { scanJob: { include: { repo: { select: { url: true; repoUrl: true; tarballUrl: true } } } } }
+}>>>[number];
+
+function mapVulnRow(v: VulnWithRepo) {
   return {
     id:              v.id,
     scanJobId:       v.scanJobId,
     repoUrl:         v.scanJob.repo.url,
+    packageRepoUrl:  v.scanJob.repo.repoUrl,
+    packageTarballUrl: v.scanJob.repo.tarballUrl,
     checkId:         v.checkId,
     path:            v.path,
     lineStart:       v.lineStart,
@@ -177,7 +191,7 @@ router.get('/dropped', async (req, res) => {
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
         orderBy: { createdAt: 'desc' },
-        include: { scanJob: { include: { repo: { select: { url: true } } } } },
+        include: { scanJob: { include: { repo: { select: { url: true, repoUrl: true, tarballUrl: true } } } } },
       }),
       prisma.vulnerability.count({ where }),
     ]);
@@ -388,9 +402,8 @@ router.post('/:id/generate-exploit', async (req, res) => {
       vulnId:        vuln.id,
       scanJobId:     vuln.scanJobId,
       vulnJson:      vuln.metadataJson as never,
-      workspacePath: '',
       sourceAcquisition: {
-        packageType: (repo.packageType as 'git' | 'npm' | 'pip') ?? 'git',
+        packageType: (repo.packageType as PackageType) ?? 'git',
         target:      repo.packageName ?? repo.url,
         version:     repo.packageVersion ?? undefined,
       },
@@ -473,9 +486,8 @@ router.post('/bulk-exploit', async (req, res) => {
         vulnId:        v.id,
         scanJobId:     v.scanJobId,
         vulnJson:      v.metadataJson as never,
-        workspacePath: '',
         sourceAcquisition: {
-          packageType: (repo.packageType as 'git' | 'npm' | 'pip') ?? 'git',
+          packageType: (repo.packageType as PackageType) ?? 'git',
           target:      repo.packageName ?? repo.url,
           version:     repo.packageVersion ?? undefined,
         },

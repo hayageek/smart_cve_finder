@@ -7,8 +7,8 @@
  *   npm run cli --workspace=apps/workers -- exploit <vuln-json-or-file> [options]
  *
  * Scan options:
- *   --type  git|npm|pip       Source type (auto-detected for http URLs)
- *   --version <ver>           Package version, e.g. 4.17.21  (npm/pip, default: latest)
+ *   --type  git|npm|pip|cargo|go|gem   Source type (auto-detected for http URLs)
+ *   --version <ver>                    Package version (registry packages, default: latest)
  *   --no-exploit              Skip exploit generation after scan
  *   --keep                    Keep workspace on disk after finishing
  *   --workspace <dir>         Custom workspace root (default: /tmp/secscan-cli)
@@ -16,7 +16,7 @@
  *
  * Exploit options:
  *   --source  <url|pkg>       Download source before running exploit
- *   --type    git|npm|pip     Source type for --source (auto for http URLs)
+ *   --type    git|npm|pip|cargo|go|gem   Source type for --source (auto for http URLs)
  *   --version <ver>           Package version for --source
  *
  * Shared options:
@@ -42,7 +42,7 @@ import path from 'path';
 import readline from 'readline';
 import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
-import { QUEUE_NAMES } from '@secscan/shared';
+import { QUEUE_NAMES, type PackageType } from '@secscan/shared';
 // Raise listener limit before the SDK loads (it adds AbortSignal listeners
 // for each concurrent run; the default of 10 is too low).
 setMaxListeners(100);
@@ -125,7 +125,7 @@ function resolveFromRoot(p: string): string {
 }
 
 const opts = {
-  type:         (getFlag('--type') ?? (target?.startsWith('http') ? 'git' : null)) as 'git' | 'npm' | 'pip' | null,
+  type:         (getFlag('--type') ?? (target?.startsWith('http') ? 'git' : null)) as PackageType | null,
   source:       getFlag('--source'),
   version:      getFlag('--version'),
   model:        getFlag('--model')       ?? process.env.CURSOR_AGENT_MODEL ?? 'claude-sonnet-4-5',
@@ -184,7 +184,7 @@ function sevColour(sev: string): string {
 
 // ── SCAN command ──────────────────────────────────────────────────
 async function runScan() {
-  if (!target) { log.error('Usage: secscan scan <url-or-package-name> [--type npm|pip|git]'); process.exit(1); }
+  if (!target) { log.error('Usage: secscan scan <url-or-package-name> [--type npm|pip|cargo|go|gem|git]'); process.exit(1); }
 
   const workspacePath = path.join(opts.workspace, `scan_${Date.now()}`);
   await mkdir(workspacePath, { recursive: true });
@@ -380,7 +380,7 @@ async function runExploit() {
 
   // Resolve source type: --source may be a URL (auto → git) or package name (needs --type)
   const sourceTarget = opts.source;
-  const sourceType   = (opts.type ?? (sourceTarget?.startsWith('http') ? 'git' : null)) as 'git' | 'npm' | 'pip' | null;
+  const sourceType   = (opts.type ?? (sourceTarget?.startsWith('http') ? 'git' : null)) as PackageType | null;
 
   log.raw('\n' + C.bold + '═'.repeat(60) + C.reset);
   log.raw(`${C.bold} SecScan CLI — Exploit Generator${C.reset}`);
@@ -397,7 +397,7 @@ async function runExploit() {
   // ── Acquire source (if --source was provided) ──────────────────
   if (sourceTarget) {
     if (!sourceType) {
-      log.error('Cannot determine source type. Pass --type git|npm|pip alongside --source.');
+      log.error('Cannot determine source type. Pass --type git|npm|pip|cargo|go|gem alongside --source.');
       process.exit(1);
     }
     log.step('1/3  Acquiring source code');
@@ -611,9 +611,8 @@ async function queueExploit() {
       vulnId:        v.id,
       scanJobId:     v.scanJobId,
       vulnJson:      (v.metadataJson ?? {}) as never,
-      workspacePath: '',
       sourceAcquisition: {
-        packageType: (repo.packageType as 'git' | 'npm' | 'pip') ?? 'git',
+        packageType: (repo.packageType as PackageType) ?? 'git',
         target:      repo.packageName ?? repo.url,
         version:     repo.packageVersion ?? undefined,
       },
@@ -637,26 +636,26 @@ if (!command || command === '--help' || command === '-h') {
 ${C.bold}SecScan CLI${C.reset}
 
 Commands:
-  ${C.cyan}scan <url|package>${C.reset}        Scan a git repo or npm/pip package
+  ${C.cyan}scan <url|package>${C.reset}        Scan a git repo or registry package
   ${C.cyan}exploit <json|file>${C.reset}       Run exploit-generator on a vuln JSON
   ${C.cyan}queue-exploit${C.reset}             Select vulns from the DB and push to exploit queue
 
 Scan options:
-  --type  git|npm|pip          Source type  (auto for http URLs)
-  --version <ver>              Package version (npm/pip, default: latest)
+  --type  git|npm|pip|cargo|go|gem   Source type  (auto for http URLs)
+  --version <ver>                    Package version (registry packages, default: latest)
   --no-exploit                 Skip exploit generation
   --keep                       Keep workspace on disk
 
 Exploit options:
-  --source <url|pkg>           Download source before running exploit (git URL, npm/pip name)
-  --type   git|npm|pip         Source type for --source (auto-detected for http URLs)
+  --source <url|pkg>           Download source before running exploit
+  --type   git|npm|pip|cargo|go|gem   Source type for --source (auto-detected for http URLs)
   --version <ver>              Package version for --source
 
 Queue-exploit options:
   --severity <list>            Comma-separated severities  (default: CRITICAL,HIGH)
   --repo <pattern>             Filter by repo URL substring  (e.g. "dvwa_python")
   --org <org>                  Filter by GitHub/GitLab org   (e.g. "hayageek")
-  --package <name>             Filter by npm/pip package name substring
+  --package <name>             Filter by package name substring
   --include-dropped            Also queue dropped findings
   --no-only-new                Re-queue findings that already have an exploit status
   --dry-run                    Preview matching vulns without queuing

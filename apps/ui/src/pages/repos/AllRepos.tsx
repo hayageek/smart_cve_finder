@@ -32,6 +32,9 @@ interface Repo {
 const PKG_PILL: Record<string, string> = {
   npm: 'text-red-700 bg-red-50 border-red-200',
   pip: 'text-blue-700 bg-blue-50 border-blue-200',
+  cargo: 'text-orange-700 bg-orange-50 border-orange-200',
+  go: 'text-cyan-700 bg-cyan-50 border-cyan-200',
+  gem: 'text-rose-700 bg-rose-50 border-rose-200',
 };
 
 function SourceCell({ repo }: { repo: Repo }) {
@@ -231,6 +234,9 @@ export default function AllRepos() {
             <option value="git">Git repos</option>
             <option value="npm">npm packages</option>
             <option value="pip">pip packages</option>
+            <option value="cargo">Cargo crates</option>
+            <option value="go">Go modules</option>
+            <option value="gem">Ruby gems</option>
           </Select>
           <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
             <option value="">All statuses</option>

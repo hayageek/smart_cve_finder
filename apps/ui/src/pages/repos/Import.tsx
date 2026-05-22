@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Upload, FileText, AlertCircle, CheckCircle, Lock, Globe, Package } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Lock, Globe, Package, ChevronDown } from 'lucide-react';
 import { Layout } from '../../components/Layout.tsx';
 import { Button } from '../../components/ui/Button.tsx';
 import { Card } from '../../components/ui/Card.tsx';
@@ -23,6 +23,9 @@ interface PreviewResult { preview: PreviewRow[]; total: number; duplicates: numb
 const PKG_COLORS: Record<string, string> = {
   npm: 'text-red-700 bg-red-50 border-red-200',
   pip: 'text-blue-700 bg-blue-50 border-blue-200',
+  cargo: 'text-orange-700 bg-orange-50 border-orange-200',
+  go: 'text-cyan-700 bg-cyan-50 border-cyan-200',
+  gem: 'text-rose-700 bg-rose-50 border-rose-200',
   git: '',
 };
 
@@ -34,6 +37,7 @@ export default function Import() {
   const [result, setResult] = useState<{ queued: number; skipped: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [formatsOpen, setFormatsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
@@ -166,38 +170,60 @@ export default function Import() {
               </div>
             </Card>
             <p className="text-xs text-muted-foreground">
-              * Git visibility defaults to <strong>Public</strong> and is auto-confirmed on clone. npm/pip packages are always public on the registry.
+              * Git visibility defaults to <strong>Public</strong> and is auto-confirmed on clone. Registry packages are always public on the registry.
             </p>
           </>
         )}
 
-        {/* Format reference */}
+        {/* Format reference — collapsible */}
         <Card>
-          <div className="px-4 py-3 border-b border-border">
+          <button
+            className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-accent/30 transition-colors rounded-lg"
+            onClick={() => setFormatsOpen((v) => !v)}
+            aria-expanded={formatsOpen}
+          >
             <p className="text-sm font-semibold">Supported CSV formats</p>
-          </div>
-          <div className="px-4 py-3 space-y-3 text-xs">
-            <div>
-              <p className="font-medium text-muted-foreground mb-1">Git repositories</p>
-              <pre className="bg-muted rounded px-3 py-2 font-mono">{`https://github.com/org/repo
+            <ChevronDown className={cn('w-4 h-4 text-muted-foreground transition-transform', formatsOpen && 'rotate-180')} />
+          </button>
+          {formatsOpen && (
+            <div className="px-4 pb-4 space-y-3 text-xs border-t border-border pt-3">
+              <div>
+                <p className="font-medium text-muted-foreground mb-1">Git repositories</p>
+                <pre className="bg-muted rounded px-3 py-2 font-mono">{`https://github.com/org/repo
 https://bitbucket.org/org/repo,private
 https://internal.corp.com/team/service,private`}</pre>
-            </div>
-            <div>
-              <p className="font-medium text-muted-foreground mb-1">npm packages</p>
-              <pre className="bg-muted rounded px-3 py-2 font-mono">{`express,npm
+              </div>
+              <div>
+                <p className="font-medium text-muted-foreground mb-1">npm packages</p>
+                <pre className="bg-muted rounded px-3 py-2 font-mono">{`express,npm
 lodash,npm,4.17.21`}</pre>
-            </div>
-            <div>
-              <p className="font-medium text-muted-foreground mb-1">pip packages</p>
-              <pre className="bg-muted rounded px-3 py-2 font-mono">{`requests,pip
+              </div>
+              <div>
+                <p className="font-medium text-muted-foreground mb-1">pip packages</p>
+                <pre className="bg-muted rounded px-3 py-2 font-mono">{`requests,pip
 django,pip,4.2.0`}</pre>
+              </div>
+              <div>
+                <p className="font-medium text-muted-foreground mb-1">Cargo crates</p>
+                <pre className="bg-muted rounded px-3 py-2 font-mono">{`serde,cargo
+serde,cargo,1.0.0`}</pre>
+              </div>
+              <div>
+                <p className="font-medium text-muted-foreground mb-1">Go modules</p>
+                <pre className="bg-muted rounded px-3 py-2 font-mono">{`github.com/gin-gonic/gin,go
+github.com/gin-gonic/gin,go,v1.9.1`}</pre>
+              </div>
+              <div>
+                <p className="font-medium text-muted-foreground mb-1">Ruby gems</p>
+                <pre className="bg-muted rounded px-3 py-2 font-mono">{`rails,gem
+rails,gem,7.0.0`}</pre>
+              </div>
+              <p className="text-muted-foreground">
+                For git repos: visibility defaults to <em>Public</em> and is auto-confirmed when the scanner clones (auth failure → marked Private).<br />
+                For registry packages: source archives are downloaded from the public registry; the source repo URL is discovered from package metadata when available.
+              </p>
             </div>
-            <p className="text-muted-foreground">
-              For git repos: visibility defaults to <em>Public</em> and is auto-confirmed when the scanner clones (auth failure → marked Private).<br />
-              For npm/pip: the tarball is downloaded from the public registry; the source repo URL is discovered from package metadata.
-            </p>
-          </div>
+          )}
         </Card>
       </div>
     </Layout>

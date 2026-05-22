@@ -1,6 +1,17 @@
+import type { RegistryPackageType } from './types.js';
+
+export const REGISTRY_PACKAGE_TYPES = ['npm', 'pip', 'cargo', 'go', 'gem'] as const satisfies readonly RegistryPackageType[];
+
+export const REGISTRY_PROVIDER: Record<RegistryPackageType, string> = {
+  npm: 'npm',
+  pip: 'pypi',
+  cargo: 'cargo',
+  go: 'go',
+  gem: 'rubygems',
+};
+
 export const QUEUE_NAMES = {
   REPO_SCAN: 'repo-scan-queue',
-  CVE_SCAN: 'cve-scan-queue',
   EXPLOIT_GEN: 'exploit-gen-queue',
 } as const;
 

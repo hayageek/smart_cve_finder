@@ -6,7 +6,7 @@ import { prisma } from '../db/client.js';
 import { config } from '../config.js';
 import { resolveArtifactPath, type ArtifactFilename } from '../lib/artifact-files.js';
 import { buildMcpConfigPayload } from '../lib/mcp-config.js';
-import { scanQueue, cveQueue, exploitQueue } from '../queues/index.js';
+import { scanQueue, exploitQueue } from '../queues/index.js';
 
 const router = Router();
 
@@ -33,7 +33,6 @@ const clearTargetSchema = z.object({
     'vulnerabilities',
     'exploits',
     'queue-scan',
-    'queue-cve',
     'queue-exploit',
     'everything',
   ]),
@@ -51,7 +50,6 @@ router.post('/clear', async (req, res) => {
         await prisma.scanJob.deleteMany();
         await Promise.all([
           scanQueue.obliterate({ force: true }),
-          cveQueue.obliterate({ force: true }),
           exploitQueue.obliterate({ force: true }),
         ]);
         break;
@@ -82,9 +80,6 @@ router.post('/clear', async (req, res) => {
       case 'queue-scan':
         await scanQueue.obliterate({ force: true });
         break;
-      case 'queue-cve':
-        await cveQueue.obliterate({ force: true });
-        break;
       case 'queue-exploit':
         await exploitQueue.obliterate({ force: true });
         break;
@@ -96,7 +91,6 @@ router.post('/clear', async (req, res) => {
         ]);
         await Promise.all([
           scanQueue.obliterate({ force: true }),
-          cveQueue.obliterate({ force: true }),
           exploitQueue.obliterate({ force: true }),
         ]);
         break;

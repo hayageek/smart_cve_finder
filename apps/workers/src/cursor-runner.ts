@@ -21,6 +21,8 @@
  */
 
 import { setMaxListeners } from 'events';
+import path from 'path';
+import { existsSync } from 'fs';
 import { Agent, CursorAgentError } from '@cursor/sdk';
 
 // @cursor/sdk attaches AbortSignal listeners for every concurrent run.
@@ -111,9 +113,9 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
     );
   }
 
-  const prompt = promptSuffix ? `${skillPath} ${promptSuffix}` : skillPath;
+  const prompt = promptSuffix ? `${skillPath}\n${promptSuffix}` : skillPath;
 
-  // ── Debug: log the outgoing request ──────────────────────────────
+  // ── Debug: additionally log to stderr ─────────────────────────────
   if (debug) {
     DBG.line('REQUEST');
     DBG.kv('skill',  skillPath);
@@ -124,6 +126,30 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
     else              DBG.kv('prompt',  prompt);
   }
 
+  // ── Final cwd sanity log ─────────────────────────────────────────
+  // This is the LAST hop before the Cursor SDK takes over. Print to stderr
+  // unconditionally so an operator can see — for every single agent run —
+  // exactly what working directory the agent will use. This makes it trivial
+  // to spot a misconfigured path that causes the agent to scan the wrong tree.
+  const cwdInfo =
+    `[cursor-runner] Agent.create local.cwd = ${cwd} ` +
+    `(absolute=${path.isAbsolute(cwd)}, exists=${existsSync(cwd)}, ` +
+    `processCwd=${process.cwd()})`;
+  process.stderr.write(`${cwdInfo}\n`);
+  if (options.onDebug) options.onDebug(cwdInfo);
+
+  if (!path.isAbsolute(cwd)) {
+    process.stderr.write(
+      `[cursor-runner] WARNING: local.cwd is RELATIVE — the agent process will ` +
+      `resolve it against its own working dir and may scan an unintended tree.\n`,
+    );
+  }
+  if (!existsSync(cwd)) {
+    process.stderr.write(
+      `[cursor-runner] WARNING: local.cwd does NOT exist on disk (${cwd}).\n`,
+    );
+  }
+
   // Use Agent.create() + agent.send() so we can optionally stream.
   // Agent.prompt() is simpler but doesn't expose run.stream().
   const agent = await Agent.create({ apiKey, model: { id: model }, local: { cwd } });
@@ -131,6 +157,12 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
   let outputText = '';
 
   try {
+    // Log the exact prompt sent to the agent → pino file + stdout + Redis live stream.
+    if (options.onDebug) {
+      options.onDebug(`model=${model} cwd=${cwd}`);
+      options.onDebug(`agent.send prompt (${prompt.length} chars):\n${prompt}`);
+    }
+
     const run = await agent.send(prompt);
 
     if (debug) {

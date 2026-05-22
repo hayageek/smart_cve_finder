@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import type { PackageType } from '@secscan/shared';
 import { enqueueScanJob } from '../lib/scan-queue.js';
-import { scanQueue, cveQueue, exploitQueue, getQueueStats } from '../queues/index.js';
+import { scanQueue, exploitQueue, getQueueStats } from '../queues/index.js';
 
 const router = Router();
 
@@ -47,12 +47,11 @@ router.get('/queue-stats', async (_req, res) => {
 
 router.get('/active-jobs', async (_req, res) => {
   try {
-    const [scanJobs, cveJobs, exploitJobs] = await Promise.all([
+    const [scanJobs, exploitJobs] = await Promise.all([
       scanQueue.getActive(),
-      cveQueue.getActive(),
       exploitQueue.getActive(),
     ]);
-    res.json({ scan: scanJobs, cve: cveJobs, exploit: exploitJobs });
+    res.json({ scan: scanJobs, exploit: exploitJobs });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -60,12 +59,11 @@ router.get('/active-jobs', async (_req, res) => {
 
 router.get('/failed-jobs', async (_req, res) => {
   try {
-    const [scanJobs, cveJobs, exploitJobs] = await Promise.all([
+    const [scanJobs, exploitJobs] = await Promise.all([
       scanQueue.getFailed(),
-      cveQueue.getFailed(),
       exploitQueue.getFailed(),
     ]);
-    res.json({ scan: scanJobs, cve: cveJobs, exploit: exploitJobs });
+    res.json({ scan: scanJobs, exploit: exploitJobs });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -75,7 +73,6 @@ router.post('/failed/clear', async (_req, res) => {
   try {
     await Promise.all([
       scanQueue.clean(0, 100, 'failed'),
-      cveQueue.clean(0, 100, 'failed'),
       exploitQueue.clean(0, 100, 'failed'),
     ]);
     res.json({ ok: true });
@@ -86,7 +83,7 @@ router.post('/failed/clear', async (_req, res) => {
 
 router.post('/failed/:queueName/:jobId/retry', async (req, res) => {
   try {
-    const q = { [scanQueue.name]: scanQueue, [cveQueue.name]: cveQueue, [exploitQueue.name]: exploitQueue }[
+    const q = { [scanQueue.name]: scanQueue, [exploitQueue.name]: exploitQueue }[
       req.params.queueName
     ];
     if (!q) return res.status(404).json({ error: 'Queue not found' });
@@ -191,7 +188,6 @@ router.delete('/history', async (_req, res) => {
     await prisma.scanJob.deleteMany();
     await Promise.all([
       scanQueue.obliterate({ force: true }),
-      cveQueue.obliterate({ force: true }),
       exploitQueue.obliterate({ force: true }),
     ]);
     res.json({ ok: true });

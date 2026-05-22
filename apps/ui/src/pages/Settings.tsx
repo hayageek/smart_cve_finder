@@ -12,7 +12,6 @@ import type { WorkerConfig } from '@secscan/shared';
 
 const CLEAR_TARGETS = [
   { key: 'queue-scan', label: 'Scan Queue (repo-scan-queue)', color: 'outline' },
-  { key: 'queue-cve', label: 'CVE Queue (cve-scan-queue)', color: 'outline' },
   { key: 'queue-exploit', label: 'Exploit Queue (exploit-gen-queue)', color: 'outline' },
   { key: 'scan-history', label: 'Scan History', color: 'outline' },
   { key: 'vulnerabilities', label: 'Confirmed Vulnerabilities', color: 'outline' },
@@ -176,7 +175,7 @@ function ScannerTab() {
       </div>
       <div>
         <label className="text-sm font-medium">Workspace Cleanup (hours)</label>
-        <p className="text-xs text-muted-foreground">Delete cloned repos after N hours</p>
+        <p className="text-xs text-muted-foreground">Legacy setting — scanner workspaces are now cleaned immediately after each scan</p>
         <Input type="number" min={0} className="mt-1" value={form.workspaceCleanupHours} onChange={(e) => setForm((f) => ({ ...f, workspaceCleanupHours: Number(e.target.value) }))} />
       </div>
       <Button loading={update.isPending} onClick={() => update.mutate(form)}>Save Settings</Button>

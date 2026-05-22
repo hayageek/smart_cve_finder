@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 WORKDIR /app
 RUN apk add --no-cache git openssl
 
@@ -17,7 +17,7 @@ COPY apps/api ./apps/api
 RUN npx prisma generate --schema=apps/api/prisma/schema.prisma
 RUN npm run build --workspace=apps/api
 
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 RUN apk add --no-cache git openssl
 COPY --from=base /app/node_modules ./node_modules

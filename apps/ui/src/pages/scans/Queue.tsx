@@ -42,7 +42,7 @@ function QueueCard({ name, stats }: { name: string; stats: Record<string, number
 }
 
 function JobProgressCard({ job }: { job: { repoUrl: string; stage: string; progress: number; status: string; jobId: string } }) {
-  const stages = ['clone', 'cve-scan', 'exploit-gen'];
+  const stages = ['scan', 'exploit-gen'];
   const currentIdx = stages.indexOf(job.stage);
   return (
     <Card className="flex-1 min-w-0">
@@ -99,7 +99,6 @@ export default function ScanQueue() {
 
   const allFailed = [
     ...(failedData?.scan ?? []).map((j) => ({ ...j, queue: 'repo-scan-queue' })),
-    ...(failedData?.cve ?? []).map((j) => ({ ...j, queue: 'cve-scan-queue' })),
     ...(failedData?.exploit ?? []).map((j) => ({ ...j, queue: 'exploit-gen-queue' })),
   ];
 
@@ -108,7 +107,7 @@ export default function ScanQueue() {
       <div className="space-y-6">
         <section>
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Queue Counters</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {stats.map((q) => (
               <QueueCard key={q.name} name={q.name} stats={q as unknown as Record<string, number>} />
             ))}

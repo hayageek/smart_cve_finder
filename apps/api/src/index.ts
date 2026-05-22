@@ -17,7 +17,7 @@ import {
   emitJobCompleted,
   emitJobFailed,
 } from './sockets/index.js';
-import { getQueueStats, scanQueue, cveQueue, exploitQueue, scanQueueEvents, cveQueueEvents, exploitQueueEvents, closeQueues } from './queues/index.js';
+import { getQueueStats, scanQueue, exploitQueue, scanQueueEvents, exploitQueueEvents, closeQueues } from './queues/index.js';
 import { REDIS_CHANNELS, type LogLine, type ActivityEvent } from '@secscan/shared';
 
 import reposRouter from './routes/repos.js';
@@ -76,8 +76,7 @@ async function bootstrap() {
 
   // ── QueueEvents → Socket.IO job progress & activity events ───────
   const queuePairs = [
-    { qEvents: scanQueueEvents,    queue: scanQueue,    stage: 'clone'       as const },
-    { qEvents: cveQueueEvents,     queue: cveQueue,     stage: 'cve-scan'    as const },
+    { qEvents: scanQueueEvents,    queue: scanQueue,    stage: 'scan'        as const },
     { qEvents: exploitQueueEvents, queue: exploitQueue, stage: 'exploit-gen' as const },
   ];
 
@@ -91,7 +90,7 @@ async function bootstrap() {
         emitActivityEvent({
           id: jobId,
           timestamp: new Date().toISOString(),
-          type: stage === 'clone' ? 'clone' : stage === 'cve-scan' ? 'scan' : 'exploit',
+          type: stage === 'scan' ? 'scan' : 'exploit',
           message: `[${stage}] Job ${jobId} started`,
           repoUrl,
         });
@@ -124,18 +123,18 @@ async function bootstrap() {
           return;
         }
 
-        // BullMQ step finished (clone/CVE/exploit) but pipeline scan still running
-        const nextStage =
-          stage === 'clone' ? 'cve-scan' as const : 'exploit-gen' as const;
-        const progress = stage === 'clone' ? 40 : stage === 'cve-scan' ? 80 : 95;
-        emitJobProgress({
-          jobId: scanJobId,
-          scanJobId,
-          repoUrl,
-          stage: nextStage,
-          progress,
-          status: 'active',
-        });
+        // Scanner job finished but exploits may still be pending
+        if (stage === 'scan' && scanJob.status === 'exploiting') {
+          emitJobProgress({
+            jobId: scanJobId,
+            scanJobId,
+            repoUrl,
+            stage: 'exploit-gen',
+            progress: 80,
+            status: 'active',
+          });
+          return;
+        }
       } catch {}
     });
 

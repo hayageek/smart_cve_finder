@@ -13,13 +13,36 @@ import { mkdir, cp, rm, writeFile, copyFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { simpleGit } from 'simple-git';
-import type { VulnerabilityFinding, DroppedFinding } from '@secscan/shared';
+import type { VulnerabilityFinding, DroppedFinding, PackageType, RegistryPackageType } from '@secscan/shared';
 import { runCursorSkill } from './cursor-runner.js';
 import type { RunSkillOptions } from './cursor-runner.js';
 
 export type { VulnerabilityFinding, DroppedFinding };
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Remove any prior content and recreate `destDir` with a write probe.
+ * Avoids tar/npm extract failures when a leftover or root-owned directory exists
+ * (common after failed jobs or Docker volume permission mismatches).
+ */
+export async function prepareDestDir(destDir: string, log: PipelineLogger = noopLogger): Promise<void> {
+  if (existsSync(destDir)) {
+    log.warn(`Clearing existing directory before acquire: ${destDir}`);
+    await rm(destDir, { recursive: true, force: true });
+  }
+  await mkdir(destDir, { recursive: true, mode: 0o755 });
+  const probe = path.join(destDir, '.write_probe');
+  try {
+    await writeFile(probe, '');
+    await rm(probe, { force: true });
+  } catch (err) {
+    throw new Error(
+      `Workspace ${destDir} is not writable (${err}). ` +
+      `Check WORKSPACES_DIR permissions on the host volume (./volumes/workspaces).`,
+    );
+  }
+}
 
 // ── Logger interface ──────────────────────────────────────────────
 // Simple enough for pino, console, or the CLI's colour logger.
@@ -38,10 +61,19 @@ export const noopLogger: PipelineLogger = {
 
 // ── Registry types ────────────────────────────────────────────────
 
+export type ArchiveFormat = 'tgz' | 'zip' | 'gem';
+
 export interface RegistryMeta {
   resolvedVersion: string;
   tarballUrl: string;
   repoUrl: string | null;
+  archiveFormat: ArchiveFormat;
+}
+
+const REGISTRY_USER_AGENT = 'secscan-atlassian/1.0 (security-research)';
+
+async function registryFetch(url: string): Promise<Response> {
+  return fetch(url, { headers: { 'User-Agent': REGISTRY_USER_AGENT } });
 }
 
 // ── Source helpers ────────────────────────────────────────────────
@@ -78,6 +110,7 @@ export async function resolveNpm(packageName: string, version?: string): Promise
     resolvedVersion: meta.version,
     tarballUrl: meta.dist.tarball,
     repoUrl: normaliseRepoUrl(meta.repository?.url),
+    archiveFormat: 'tgz',
   };
 }
 
@@ -108,35 +141,274 @@ export async function resolvePip(packageName: string, version?: string): Promise
     resolvedVersion: meta.info.version,
     tarballUrl: sdist.url,
     repoUrl: repoUrl ?? null,
+    archiveFormat: 'tgz',
   };
 }
 
-/** Download a tarball and extract it into destDir (strips one top-level directory). */
+/** Fetch crates.io metadata for a crate version (default: latest). */
+export async function resolveCargo(crateName: string, version?: string): Promise<RegistryMeta> {
+  const base = `https://crates.io/api/v1/crates/${encodeURIComponent(crateName)}`;
+  const url = version ? `${base}/${encodeURIComponent(version)}` : base;
+  const res = await registryFetch(url);
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(`cargo crate "${crateName}" not found`);
+    throw new Error(`crates.io error ${res.status}`);
+  }
+  const data = (await res.json()) as {
+    crate?: { max_version?: string; repository?: string };
+    version?: {
+      num: string;
+      dl_path: string;
+      crate?: { repository?: string };
+    };
+  };
+
+  if (version) {
+    const ver = data.version;
+    if (!ver) throw new Error(`cargo crate "${crateName}@${version}" not found`);
+    return {
+      resolvedVersion: ver.num,
+      tarballUrl: `https://crates.io${ver.dl_path}`,
+      repoUrl: normaliseRepoUrl(data.crate?.repository ?? ver.crate?.repository),
+      archiveFormat: 'tgz',
+    };
+  }
+
+  const resolvedVersion = data.crate?.max_version;
+  if (!resolvedVersion) throw new Error(`cargo crate "${crateName}" has no published versions`);
+  return resolveCargo(crateName, resolvedVersion);
+}
+
+/** Escape a Go module path for proxy.golang.org URLs (uppercase → !lowercase). */
+export function escapeGoModulePath(modulePath: string): string {
+  let out = '';
+  for (const ch of modulePath) {
+    if (ch >= 'A' && ch <= 'Z') out += `!${ch.toLowerCase()}`;
+    else out += ch;
+  }
+  return out;
+}
+
+/** Infer a git repo URL from a Go module path when possible. */
+export function repoUrlFromGoModule(modulePath: string): string | null {
+  const parts = modulePath.split('/');
+  if (parts.length < 3) return null;
+  const host = parts[0];
+  if (host === 'github.com' || host.endsWith('.github.com')) {
+    return `https://${host}/${parts[1]}/${parts[2].replace(/\.git$/, '')}`;
+  }
+  if (host === 'gitlab.com' || host.endsWith('.gitlab.com')) {
+    return `https://${host}/${parts[1]}/${parts[2].replace(/\.git$/, '')}`;
+  }
+  if (host === 'bitbucket.org') {
+    return `https://${host}/${parts[1]}/${parts[2].replace(/\.git$/, '')}`;
+  }
+  return null;
+}
+
+function normaliseGoVersion(version?: string): string | undefined {
+  if (!version || version.toLowerCase() === 'latest') return undefined;
+  return version.startsWith('v') ? version : `v${version}`;
+}
+
+/** Fetch Go module metadata from proxy.golang.org (default: latest). */
+export async function resolveGo(modulePath: string, version?: string): Promise<RegistryMeta> {
+  const escaped = escapeGoModulePath(modulePath);
+  let resolvedVersion = normaliseGoVersion(version);
+
+  if (!resolvedVersion) {
+    const res = await registryFetch(`https://proxy.golang.org/${escaped}/@latest`);
+    if (!res.ok) {
+      if (res.status === 404) throw new Error(`go module "${modulePath}" not found`);
+      throw new Error(`Go proxy error ${res.status}`);
+    }
+    const meta = (await res.json()) as { Version: string };
+    resolvedVersion = meta.Version;
+  }
+
+  const zipUrl = `https://proxy.golang.org/${escaped}/@v/${encodeURIComponent(resolvedVersion)}.zip`;
+  return {
+    resolvedVersion,
+    tarballUrl: zipUrl,
+    repoUrl: repoUrlFromGoModule(modulePath),
+    archiveFormat: 'zip',
+  };
+}
+
+/** Fetch RubyGems metadata for a gem version (default: latest). */
+export async function resolveGem(gemName: string, version?: string): Promise<RegistryMeta> {
+  if (version) {
+    const url = `https://rubygems.org/api/v2/rubygems/${encodeURIComponent(gemName)}/versions/${encodeURIComponent(version)}.json`;
+    const res = await registryFetch(url);
+    if (!res.ok) {
+      if (res.status === 404) throw new Error(`gem "${gemName}@${version}" not found`);
+      throw new Error(`RubyGems error ${res.status}`);
+    }
+    const meta = (await res.json()) as {
+      number: string;
+      gem_uri: string;
+      source_code_uri?: string;
+      homepage_uri?: string;
+    };
+    return {
+      resolvedVersion: meta.number,
+      tarballUrl: meta.gem_uri,
+      repoUrl: normaliseRepoUrl(meta.source_code_uri ?? meta.homepage_uri),
+      archiveFormat: 'gem',
+    };
+  }
+
+  const url = `https://rubygems.org/api/v1/gems/${encodeURIComponent(gemName)}.json`;
+  const res = await registryFetch(url);
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(`gem "${gemName}" not found`);
+    throw new Error(`RubyGems error ${res.status}`);
+  }
+  const meta = (await res.json()) as {
+    version: string;
+    gem_uri: string;
+    source_code_uri?: string;
+    homepage_uri?: string;
+  };
+  return {
+    resolvedVersion: meta.version,
+    tarballUrl: meta.gem_uri,
+    repoUrl: normaliseRepoUrl(meta.source_code_uri ?? meta.homepage_uri),
+    archiveFormat: 'gem',
+  };
+}
+
+async function resolveRegistryPackage(
+  packageType: RegistryPackageType,
+  target: string,
+  version?: string,
+): Promise<RegistryMeta> {
+  switch (packageType) {
+    case 'npm':
+      return resolveNpm(target, version);
+    case 'pip':
+      return resolvePip(target, version);
+    case 'cargo':
+      return resolveCargo(target, version);
+    case 'go':
+      return resolveGo(target, version);
+    case 'gem':
+      return resolveGem(target, version);
+  }
+}
+
+/** Download a registry archive and extract it into destDir. */
 export async function downloadAndExtract(
-  tarballUrl: string,
+  archiveUrl: string,
   destDir: string,
   log: PipelineLogger = noopLogger,
+  format: ArchiveFormat = 'tgz',
 ): Promise<void> {
-  log.info(`Downloading ${tarballUrl}`);
-  const res = await fetch(tarballUrl);
-  if (!res.ok) throw new Error(`Download failed: ${res.status} ${tarballUrl}`);
-  const tmpTar = path.join(destDir, '..', `_dl_${Date.now()}.tgz`);
-  await writeFile(tmpTar, Buffer.from(await res.arrayBuffer()));
+  switch (format) {
+    case 'tgz':
+      return downloadTgz(archiveUrl, destDir, log);
+    case 'zip':
+      return downloadZip(archiveUrl, destDir, log);
+    case 'gem':
+      return downloadGem(archiveUrl, destDir, log);
+  }
+}
+
+async function downloadArchiveToFile(archiveUrl: string, destPath: string, log: PipelineLogger): Promise<void> {
+  log.info(`Downloading ${archiveUrl}`);
+  const res = await fetch(archiveUrl, { headers: { 'User-Agent': REGISTRY_USER_AGENT } });
+  if (!res.ok) throw new Error(`Download failed: ${res.status} ${archiveUrl}`);
+  await writeFile(destPath, Buffer.from(await res.arrayBuffer()));
+}
+
+async function copyExtractedTree(sourceRoot: string, destDir: string, log: PipelineLogger): Promise<void> {
+  await prepareDestDir(destDir, log);
+  for (const name of await readdir(sourceRoot)) {
+    await cp(path.join(sourceRoot, name), path.join(destDir, name), { recursive: true });
+  }
+}
+
+async function downloadTgz(tarballUrl: string, destDir: string, log: PipelineLogger): Promise<void> {
+  const parentDir = path.dirname(destDir);
+  const stamp = `${process.pid}_${Date.now()}`;
+  const tmpTar = path.join(parentDir, `_dl_${stamp}.tgz`);
+  const tmpExtract = path.join(parentDir, `_extract_${stamp}`);
+
+  await downloadArchiveToFile(tarballUrl, tmpTar, log);
   log.info(`Extracting to ${destDir}`);
   try {
-    await execFileAsync('tar', ['-xzf', tmpTar, '-C', destDir, '--strip-components=1']);
+    await mkdir(tmpExtract, { recursive: true, mode: 0o755 });
+    await execFileAsync('tar', ['-xzf', tmpTar, '-C', tmpExtract, '--strip-components=1']);
+    await copyExtractedTree(tmpExtract, destDir, log);
   } finally {
+    await rm(tmpExtract, { recursive: true, force: true }).catch(() => {});
     await rm(tmpTar, { force: true }).catch(() => {});
+  }
+}
+
+async function findZipExtractRoot(extractDir: string): Promise<string> {
+  const entries = await readdir(extractDir, { withFileTypes: true });
+  const versionDir = entries.find((e) => e.isDirectory() && e.name.includes('@v'));
+  if (versionDir) return path.join(extractDir, versionDir.name);
+
+  const dirs = entries.filter((e) => e.isDirectory());
+  const files = entries.filter((e) => e.isFile());
+  if (dirs.length === 1 && files.length === 0) {
+    return findZipExtractRoot(path.join(extractDir, dirs[0]!.name));
+  }
+  return extractDir;
+}
+
+async function downloadZip(zipUrl: string, destDir: string, log: PipelineLogger): Promise<void> {
+  const parentDir = path.dirname(destDir);
+  const stamp = `${process.pid}_${Date.now()}`;
+  const tmpZip = path.join(parentDir, `_dl_${stamp}.zip`);
+  const tmpExtract = path.join(parentDir, `_extract_${stamp}`);
+
+  await downloadArchiveToFile(zipUrl, tmpZip, log);
+  log.info(`Extracting to ${destDir}`);
+  try {
+    await mkdir(tmpExtract, { recursive: true, mode: 0o755 });
+    await execFileAsync('unzip', ['-q', tmpZip, '-d', tmpExtract]);
+    const sourceRoot = await findZipExtractRoot(tmpExtract);
+    await copyExtractedTree(sourceRoot, destDir, log);
+  } finally {
+    await rm(tmpExtract, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpZip, { force: true }).catch(() => {});
+  }
+}
+
+async function downloadGem(gemUrl: string, destDir: string, log: PipelineLogger): Promise<void> {
+  const parentDir = path.dirname(destDir);
+  const stamp = `${process.pid}_${Date.now()}`;
+  const tmpGem = path.join(parentDir, `_dl_${stamp}.gem`);
+  const tmpOuter = path.join(parentDir, `_gem_${stamp}`);
+  const tmpExtract = path.join(parentDir, `_extract_${stamp}`);
+
+  await downloadArchiveToFile(gemUrl, tmpGem, log);
+  log.info(`Extracting to ${destDir}`);
+  try {
+    await mkdir(tmpOuter, { recursive: true, mode: 0o755 });
+    await execFileAsync('tar', ['-xf', tmpGem, '-C', tmpOuter]);
+    const dataTarGz = path.join(tmpOuter, 'data.tar.gz');
+    if (!existsSync(dataTarGz)) throw new Error(`Invalid gem archive: missing data.tar.gz (${gemUrl})`);
+    await mkdir(tmpExtract, { recursive: true, mode: 0o755 });
+    await execFileAsync('tar', ['-xzf', dataTarGz, '-C', tmpExtract]);
+    await copyExtractedTree(tmpExtract, destDir, log);
+  } finally {
+    await rm(tmpExtract, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpOuter, { recursive: true, force: true }).catch(() => {});
+    await rm(tmpGem, { force: true }).catch(() => {});
   }
 }
 
 // ── acquireSource ─────────────────────────────────────────────────
 
-export type PackageType = 'git' | 'npm' | 'pip';
+export type { PackageType };
 
 export interface AcquireOptions {
   packageType: PackageType;
-  /** Git URL (git type) or package name (npm/pip). */
+  /** Git URL (git type) or package name / module path (registry). */
   target: string;
   version?: string;
   destDir: string;
@@ -146,15 +418,19 @@ export interface AcquireOptions {
 export interface AcquireResult {
   resolvedVersion?: string;
   repoUrl?: string | null;
+  tarballUrl?: string | null;
   /** True when the source is private / inaccessible — caller should mark it so. */
   isPrivate?: boolean;
 }
 
 /**
  * Acquire source code into `destDir`:
- *  - git  → shallow clone
- *  - npm  → resolve registry + download tarball
- *  - pip  → resolve PyPI + download sdist tarball
+ *  - git    → shallow clone
+ *  - npm    → resolve registry + download tarball
+ *  - pip    → resolve PyPI + download sdist tarball
+ *  - cargo  → resolve crates.io + download .crate tarball
+ *  - go     → resolve Go proxy + download module zip
+ *  - gem    → resolve RubyGems + download .gem archive
  */
 export async function acquireSource(
   opts: AcquireOptions,
@@ -162,27 +438,18 @@ export async function acquireSource(
 ): Promise<AcquireResult> {
   const { packageType, target, version, destDir, gitDepth = 1 } = opts;
 
-  if (packageType === 'npm' || packageType === 'pip') {
+  if (packageType !== 'git') {
     log.info(`Resolving ${packageType} package: ${target}${version ? `@${version}` : ''}`);
-    const meta =
-      packageType === 'npm'
-        ? await resolveNpm(target, version)
-        : await resolvePip(target, version);
+    const meta = await resolveRegistryPackage(packageType, target, version);
     log.info(`Resolved ${target}@${meta.resolvedVersion} — ${meta.tarballUrl}`);
     if (meta.repoUrl) log.info(`Repository: ${meta.repoUrl}`);
-    await downloadAndExtract(meta.tarballUrl, destDir, log);
-    return { resolvedVersion: meta.resolvedVersion, repoUrl: meta.repoUrl };
+    await downloadAndExtract(meta.tarballUrl, destDir, log, meta.archiveFormat);
+    return { resolvedVersion: meta.resolvedVersion, repoUrl: meta.repoUrl, tarballUrl: meta.tarballUrl };
   }
 
   // git — destination must be empty (clone fails otherwise)
   log.info(`Cloning ${target}`);
-  await mkdir(destDir, { recursive: true });
-  const existing = await readdir(destDir).catch(() => [] as string[]);
-  if (existing.length > 0) {
-    log.warn(`Clearing non-empty directory before clone: ${destDir}`);
-    await rm(destDir, { recursive: true, force: true });
-    await mkdir(destDir, { recursive: true });
-  }
+  await prepareDestDir(destDir, log);
   try {
     await simpleGit().clone(target, destDir, { '--depth': String(gitDepth) });
     log.info('Clone successful');
@@ -334,15 +601,19 @@ export async function collectExploitArtifacts(
 
   await mkdir(destDir, { recursive: true });
 
-  const files: Array<[keyof ExploitArtifactPaths, string]> = [
+  // Required artifacts — warn if missing (indicates skill output is incomplete)
+  const required: Array<[keyof ExploitArtifactPaths, string]> = [
     ['report', 'report.md'],
     ['result', 'result.txt'],
-    ['error',  'error.txt'],
-    ['payload',  'payload.py'],
-    ['exploit',  'exploit.py'],
+  ];
+  // Optional artifacts — only produced in certain outcomes, absence is normal
+  const optional: Array<[keyof ExploitArtifactPaths, string]> = [
+    ['error',   'error.txt'],   // written only when exploit fails
+    ['payload', 'payload.py'],  // written only when a payload is generated
+    ['exploit', 'exploit.py'],  // written only when a full exploit is generated
   ];
 
-  for (const [key, filename] of files) {
+  for (const [key, filename] of required) {
     const src = path.join(reportDir, filename);
     if (existsSync(src)) {
       const dest = path.join(destDir, filename);
@@ -350,8 +621,19 @@ export async function collectExploitArtifacts(
       paths[key] = dest;
       log.info(`Saved artifact: ${dest}`);
     } else {
-      log.warn(`Artifact not found: ${src}`);
+      log.warn(`Expected artifact not found: ${src}`);
     }
+  }
+
+  for (const [key, filename] of optional) {
+    const src = path.join(reportDir, filename);
+    if (existsSync(src)) {
+      const dest = path.join(destDir, filename);
+      await copyFile(src, dest);
+      paths[key] = dest;
+      log.info(`Saved artifact: ${dest}`);
+    }
+    // Missing optional artifacts are normal — no warning
   }
 
   return paths;
@@ -421,20 +703,20 @@ export interface CveScanResult {
 
 /**
  * Run the cve-pattern-hunter skill against a workspace and return parsed findings.
- * Used by both the BullMQ cveWorker and the CLI's `scan` command.
+ * Used by both the BullMQ scanWorker and the CLI's `scan` command.
  */
 export async function runCveScan(
   opts: CveScanOptions,
   log: PipelineLogger = noopLogger,
 ): Promise<CveScanResult> {
   const result = await runCursorSkill({
-    skillPath: 'Follow the instructions in the "cve-pattern-hunter" skill to find the security vulnerabilities',
+    skillPath: `Follow the "cve-pattern-hunter" skill instructions to find security vulnerabilities.\nWorkspace: ${opts.cwd}`,
     cwd:       opts.cwd,
     model:     opts.model,
     apiKey:    opts.apiKey,
     debug:     opts.debug,
     onChunk:   opts.onChunk,
-    onDebug:   opts.debug ? (msg) => log.info(`[cursor] ${msg}`) : undefined,
+    onDebug: (msg) => log.info(`[cursor] ${msg}`),
   });
 
   const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
@@ -468,15 +750,20 @@ export async function runExploitGen(
   opts: ExploitGenOptions,
   log: PipelineLogger = noopLogger,
 ): Promise<ExploitGenResult> {
+  const skillPath =
+    `Follow the "exploit-generator" skill instructions to generate an exploit for the vulnerability below.\n` +
+    `Workspace: ${opts.cwd}\n` +
+    `Vulnerability details:`;
+
   const result = await runCursorSkill({
-    skillPath:    'Follow the instructions in the "exploit-generator" skill to generate the exploit, don\'t try to find any other vulnerabilities. Provide the exploit for the vulnerability in the JSON format.',
+    skillPath,
     promptSuffix: opts.vulnJson,
     cwd:          opts.cwd,
     model:        opts.model,
     apiKey:       opts.apiKey,
     debug:        opts.debug,
     onChunk:      opts.onChunk,
-    onDebug:      opts.debug ? (msg) => log.info(`[cursor] ${msg}`) : undefined,
+    onDebug: (msg) => log.info(`[cursor] ${msg}`),
   });
 
   const exploitResult = parseExploitResult(result.text);

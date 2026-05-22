@@ -1,17 +1,29 @@
 import 'dotenv/config';
+import path from 'path';
+import { mkdirSync } from 'fs';
 import { z } from 'zod';
+
+/**
+ * Resolve a path to absolute. Relative paths are resolved against process.cwd()
+ * at module load. Centralising this here means every consumer (workers, CLI,
+ * cursor-runner) sees the same absolute paths — preventing the class of bugs
+ * where the Cursor SDK's agent process resolves a relative cwd against its own
+ * working directory and ends up scanning unintended files.
+ */
+const absolutePath = (defaultRel: string) =>
+  z.string().default(defaultRel).transform((p) => path.resolve(p));
 
 const schema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_HOST: z.string().default('redis'),
   REDIS_PORT: z.coerce.number().default(6379),
   REDIS_PASSWORD: z.string().optional(),
-  WORKSPACES_DIR: z.string().default('./data/workspaces'),
-  REPORTS_DIR: z.string().default('./data/atlassian_reports'),
-  LOGS_DIR: z.string().default('./data/logs'),
+  WORKSPACES_DIR: absolutePath('./data/workspaces'),
+  REPORTS_DIR:    absolutePath('./data/atlassian_reports'),
+  LOGS_DIR:       absolutePath('./data/logs'),
   // Local directory containing the pre-cloned security skills (cve-pattern-hunter, exploit-generator).
   // Takes precedence over SKILLS_REPO_URL — if the directory exists, no git clone is performed.
-  SKILLS_DIR: z.string().default('/data/skills'),
+  SKILLS_DIR:     absolutePath('/data/skills'),
   SKILLS_REPO_URL: z.string().default('https://github.com/hayageek/security_skills'),
   // Timeout (ms) for a single @cursor/sdk Agent.prompt() call
   CURSOR_AGENT_TIMEOUT_MS: z.coerce.number().default(300000),
@@ -38,12 +50,40 @@ const schema = z.object({
 
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) {
-  console.error('❌ Invalid environment variables:\n', parsed.error.format());
+  console.error('Invalid environment variables:\n', parsed.error.format());
   process.exit(1);
 }
 
 export const config = parsed.data;
 
+// ── Path pre-flight ──────────────────────────────────────────────
+// Create the data directories up-front so the workers fail loudly at
+// startup (instead of silently mkdir-ing them later from inside a job).
+// Also surface the resolved paths to stderr so an operator can immediately
+// spot a misconfigured WORKSPACES_DIR (e.g. one that points outside the
+// project root) before the first scan runs.
+for (const [name, dir] of [
+  ['WORKSPACES_DIR', config.WORKSPACES_DIR],
+  ['REPORTS_DIR',    config.REPORTS_DIR],
+  ['LOGS_DIR',       config.LOGS_DIR],
+] as const) {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    console.error(`Failed to create ${name} at ${dir}:`, err);
+    process.exit(1);
+  }
+}
+
+if (process.env.DEBUG_CONFIG_PATHS !== 'false') {
+  process.stderr.write(
+    `[config] paths resolved (processCwd=${process.cwd()})\n` +
+    `[config]   WORKSPACES_DIR = ${config.WORKSPACES_DIR}\n` +
+    `[config]   REPORTS_DIR    = ${config.REPORTS_DIR}\n` +
+    `[config]   LOGS_DIR       = ${config.LOGS_DIR}\n` +
+    `[config]   SKILLS_DIR     = ${config.SKILLS_DIR}\n`,
+  );
+}
 
 export const redisOptions = {
   host: config.REDIS_HOST,

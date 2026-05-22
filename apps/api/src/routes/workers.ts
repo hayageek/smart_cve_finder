@@ -4,7 +4,7 @@ import path from 'path';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
 import { config } from '../config.js';
-import { scanQueue, cveQueue, exploitQueue, getQueueStats } from '../queues/index.js';
+import { scanQueue, exploitQueue, getQueueStats } from '../queues/index.js';
 import { emitQueueStats } from '../sockets/index.js';
 import { readWorkerLogTail } from '../lib/parseWorkerLogs.js';
 
@@ -22,6 +22,7 @@ router.get('/config', async (_req, res) => {
 const configSchema = z.object({
   scannerConcurrency: z.coerce.number().min(1).max(50).optional(),
   exploitConcurrency: z.coerce.number().min(1).max(50).optional(),
+  autoQueueExploits: z.boolean().optional(),
   exploitMinSeverity: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional(),
   exploitIncludeDropped: z.boolean().optional(),
   dedupWindowHours: z.coerce.number().min(0).optional(),
@@ -49,7 +50,7 @@ router.patch('/config', async (req, res) => {
 
 router.post('/scanner/pause', async (_req, res) => {
   try {
-    await Promise.all([scanQueue.pause(), cveQueue.pause()]);
+    await scanQueue.pause();
     const stats = await getQueueStats();
     emitQueueStats(stats);
     res.json({ ok: true });
@@ -60,7 +61,7 @@ router.post('/scanner/pause', async (_req, res) => {
 
 router.post('/scanner/resume', async (_req, res) => {
   try {
-    await Promise.all([scanQueue.resume(), cveQueue.resume()]);
+    await scanQueue.resume();
     const stats = await getQueueStats();
     emitQueueStats(stats);
     res.json({ ok: true });
@@ -71,7 +72,7 @@ router.post('/scanner/resume', async (_req, res) => {
 
 router.post('/scanner/drain', async (_req, res) => {
   try {
-    await Promise.all([scanQueue.drain(), cveQueue.drain()]);
+    await scanQueue.drain();
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -113,9 +114,8 @@ const SCAN_PIPELINE_ACTIVE = ['pending', 'cloning', 'scanning', 'exploiting', 'e
 
 router.get('/queue-stats', async (_req, res) => {
   try {
-    const [scanPaused, cvePaused, exploitPaused, stats, scanJobGroups] = await Promise.all([
+    const [scanPaused, exploitPaused, stats, scanJobGroups] = await Promise.all([
       scanQueue.isPaused(),
-      cveQueue.isPaused(),
       exploitQueue.isPaused(),
       getQueueStats(),
       prisma.scanJob.groupBy({ by: ['status'], _count: true }),
@@ -123,7 +123,7 @@ router.get('/queue-stats', async (_req, res) => {
     const scanJobMap = Object.fromEntries(scanJobGroups.map((g) => [g.status, g._count]));
     res.json({
       stats,
-      paused: { scanner: scanPaused || cvePaused, exploit: exploitPaused },
+      paused: { scanner: scanPaused, exploit: exploitPaused },
       pipeline: {
         inProgress: SCAN_PIPELINE_ACTIVE.reduce((sum, s) => sum + (scanJobMap[s] ?? 0), 0),
         done: scanJobMap['done'] ?? 0,
@@ -171,7 +171,7 @@ router.delete('/logs', (_req, res) => {
 
 router.post('/queues/:name/clear', async (req, res) => {
   try {
-    const q = { 'repo-scan-queue': scanQueue, 'cve-scan-queue': cveQueue, 'exploit-gen-queue': exploitQueue }[
+    const q = { 'repo-scan-queue': scanQueue, 'exploit-gen-queue': exploitQueue }[
       req.params.name
     ];
     if (!q) return res.status(404).json({ error: 'Queue not found' });

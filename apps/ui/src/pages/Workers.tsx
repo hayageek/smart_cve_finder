@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Play, Pause, Square, Download, Trash } from 'lucide-react';
+import { Play, Pause, Square, Download, Trash, Zap, Maximize2, Minimize2 } from 'lucide-react';
 import { Layout } from '../components/Layout.tsx';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card.tsx';
 import { Button } from '../components/ui/Button.tsx';
@@ -73,7 +73,7 @@ function WorkerPanel({ type, paused, stats, pipeline, concurrency, onConcurrency
             title={type === 'scanner' ? 'Drain scanner queues' : 'Drain exploit queue'}
             description={
               type === 'scanner'
-                ? `Remove all waiting jobs from the repo scan and CVE queues (${stats.waiting} waiting shown for repo scan). Jobs already running are not stopped. Cleared work will not run unless re-queued.`
+                ? `Remove all waiting jobs from the scanner queue (${stats.waiting} waiting). Jobs already running are not stopped. Cleared work will not run unless re-queued.`
                 : `Remove all ${stats.waiting} waiting job${stats.waiting === 1 ? '' : 's'} from the exploit generation queue. Jobs already running are not stopped. Cleared work will not run unless re-queued.`
             }
             confirmText="Drain queue"
@@ -95,6 +95,7 @@ export default function Workers() {
   const qc = useQueryClient();
   const [logFilter, setLogFilter] = useState<'all' | 'debug' | 'info' | 'warn' | 'error'>('all');
   const [workerFilter, setWorkerFilter] = useState('all');
+  const [logFullscreen, setLogFullscreen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const { lines: allLogs, historyLoaded, clearDisplay } = useWorkerLogs(500, 500);
   const liveQueueStats = useLiveQueueStats();
@@ -139,14 +140,7 @@ export default function Workers() {
   const stats = liveQueueStats.length > 0 ? liveQueueStats : queueData?.stats ?? [];
   const paused = queueData?.paused ?? { scanner: false, exploit: false };
 
-  const scanQ = stats.find((s) => s.name === 'repo-scan-queue') ?? { active: 0, waiting: 0, completed: 0, failed: 0 };
-  const cveQ = stats.find((s) => s.name === 'cve-scan-queue') ?? { active: 0, waiting: 0, completed: 0, failed: 0 };
-  const scanStats = {
-    active: scanQ.active + cveQ.active,
-    waiting: scanQ.waiting + cveQ.waiting,
-    completed: scanQ.completed + cveQ.completed,
-    failed: scanQ.failed + cveQ.failed,
-  };
+  const scanStats = stats.find((s) => s.name === 'repo-scan-queue') ?? { active: 0, waiting: 0, completed: 0, failed: 0 };
   const exploitStats = stats.find((s) => s.name === 'exploit-gen-queue') ?? { active: 0, waiting: 0, completed: 0, failed: 0 };
   const pipeline = queueData?.pipeline;
 
@@ -159,6 +153,15 @@ export default function Workers() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [filteredLogs]);
+
+  useEffect(() => {
+    if (!logFullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLogFullscreen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [logFullscreen]);
 
   const downloadLogs = async () => {
     const blob = await api.downloadWorkerLogs();
@@ -201,11 +204,77 @@ export default function Workers() {
         </div>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-muted-foreground" />
+              <CardTitle>Exploit Auto-Queue</CardTitle>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Control whether findings are automatically queued for exploitation after a scan.
+              When disabled, use the Vulnerabilities page to manually select and queue findings.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Auto-queue after scan</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  When off, scans save findings only — nothing is queued automatically.
+                </p>
+              </div>
+              <button
+                onClick={() => updateConfig.mutate({ autoQueueExploits: !config?.autoQueueExploits })}
+                className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${config?.autoQueueExploits ? 'bg-primary' : 'bg-muted'}`}
+                title={config?.autoQueueExploits ? 'Disable auto-queue' : 'Enable auto-queue'}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${config?.autoQueueExploits ? 'translate-x-5' : ''}`} />
+              </button>
+            </div>
+            {config?.autoQueueExploits && (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Minimum severity</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Only queue findings at or above this severity.</p>
+                  </div>
+                  <Select
+                    value={config.exploitMinSeverity}
+                    onChange={(e) => updateConfig.mutate({ exploitMinSeverity: e.target.value })}
+                    className="w-36"
+                  >
+                    {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Include dropped findings</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Also queue findings that the scanner intentionally dropped.</p>
+                  </div>
+                  <button
+                    onClick={() => updateConfig.mutate({ exploitIncludeDropped: !config?.exploitIncludeDropped })}
+                    className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${config?.exploitIncludeDropped ? 'bg-primary' : 'bg-muted'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${config?.exploitIncludeDropped ? 'translate-x-5' : ''}`} />
+                  </button>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card
+          className={cn(
+            logFullscreen && 'fixed inset-0 z-50 flex flex-col rounded-none border-0 shadow-none h-screen',
+          )}
+        >
+          <CardHeader className={cn('flex flex-row items-center justify-between', logFullscreen && 'flex-shrink-0')}>
             <div>
               <CardTitle>Log Stream</CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {historyLoaded ? 'Last 500 lines from disk + live updates' : 'Loading history…'}
+                {logFullscreen && ' · Esc to exit'}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -220,13 +289,24 @@ export default function Workers() {
                 <option value="warn">WARN</option>
                 <option value="error">ERROR</option>
               </Select>
-              <Button size="sm" variant="ghost" onClick={downloadLogs}><Download className="w-3.5 h-3.5" /></Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setLogFullscreen((v) => !v)}
+                title={logFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                {logFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={downloadLogs} title="Download logs"><Download className="w-3.5 h-3.5" /></Button>
               <Button size="sm" variant="ghost" onClick={() => clearLogs.mutate()} title="Clear log file"><Trash className="w-3.5 h-3.5" /></Button>
             </div>
           </CardHeader>
           <div
             ref={logRef}
-            className="h-80 overflow-y-auto font-mono text-xs bg-gray-950 text-gray-100 p-3 space-y-0.5"
+            className={cn(
+              'overflow-y-auto font-mono text-xs bg-gray-950 text-gray-100 p-3 space-y-0.5',
+              logFullscreen ? 'flex-1 min-h-0' : 'h-80',
+            )}
           >
             {!historyLoaded ? (
               <p className="text-gray-500">Loading log history…</p>

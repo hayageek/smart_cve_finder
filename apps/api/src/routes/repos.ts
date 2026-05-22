@@ -3,116 +3,20 @@ import multer from 'multer';
 import { parse } from 'csv-parse/sync';
 import { prisma } from '../db/client.js';
 import { enqueueScanJob, isRepoActivelyScanning, isRepoInScanPipeline } from '../lib/scan-queue.js';
+import {
+  detectGitProvider,
+  entryToCreateData,
+  entryToScanJobPayload,
+  parseCsvRow,
+  registryProvider,
+  type ParsedEntry,
+} from '../lib/repo-import.js';
 import { emitActivityEvent } from '../sockets/index.js';
 import { type PackageType } from '@secscan/shared';
 import { z } from 'zod';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-
-// ── Helpers ───────────────────────────────────────────────────────
-
-function detectGitProvider(url: string): string {
-  if (url.includes('github.com')) return 'github';
-  if (url.includes('bitbucket.org')) return 'bitbucket';
-  if (url.includes('gitlab.com')) return 'gitlab';
-  return 'other';
-}
-
-type ParsedEntry =
-  | { packageType: 'git'; url: string; isPrivate: boolean }
-  | { packageType: 'npm' | 'pip'; url: string; packageName: string; packageVersion?: string };
-
-/**
- * Compute the canonical unique key (stored in the `url` column).
- *
- *   git repos  →  the clone URL as-is
- *                 e.g.  https://github.com/expressjs/express
- *
- *   packages   →  {type}:{name}  or  {type}:{name}@{version}
- *                 e.g.  npm:express
- *                       npm:express@4.17.21
- *                       pip:requests
- *                       pip:requests@2.31.0
- *
- * This ensures:
- *   - Two different npm packages from the same git repo are different rows.
- *   - The same package at different versions are different rows.
- *   - Duplicate imports of identical (type, name, version) are de-duplicated.
- */
-function buildKey(type: 'git' | 'npm' | 'pip', nameOrUrl: string, version?: string): string {
-  if (type === 'git') return nameOrUrl;
-  return version ? `${type}:${nameOrUrl}@${version}` : `${type}:${nameOrUrl}`;
-}
-
-/**
- * Parse a single CSV row into a typed entry.
- *
- * Supported formats:
- *   https://github.com/org/repo[,public|private]   → git
- *   express,npm[,version]                           → npm package
- *   requests,pip[,version]                          → pip package
- */
-function parseRow(row: string[]): ParsedEntry | null {
-  const col0 = row[0]?.trim();
-  if (!col0) return null;
-
-  // Git URL
-  if (col0.startsWith('http://') || col0.startsWith('https://')) {
-    const visField = row.slice(1).find((v) =>
-      ['public', 'private', 'internal'].includes(v.toLowerCase().trim()),
-    );
-    const isPrivate = visField
-      ? ['private', 'internal'].includes(visField.toLowerCase().trim())
-      : false;
-    return { packageType: 'git', url: buildKey('git', col0), isPrivate };
-  }
-
-  // Package: name,type[,version]
-  const pkgType = row[1]?.trim().toLowerCase() as PackageType | undefined;
-  if (pkgType === 'npm' || pkgType === 'pip') {
-    const rawVersion = row[2]?.trim();
-    const packageVersion = rawVersion && rawVersion.toLowerCase() !== 'latest' ? rawVersion : undefined;
-    const url = buildKey(pkgType, col0, packageVersion);
-    return { packageType: pkgType, url, packageName: col0, packageVersion };
-  }
-
-  return null;
-}
-
-function entryToCreateData(entry: ParsedEntry) {
-  if (entry.packageType === 'git') {
-    return {
-      url: entry.url,
-      packageType: 'git' as const,
-      provider: detectGitProvider(entry.url),
-      isPrivate: entry.isPrivate,
-      status: 'queued',
-    };
-  }
-  return {
-    url: entry.url,
-    packageType: entry.packageType,
-    packageName: entry.packageName,
-    packageVersion: entry.packageVersion ?? null,
-    provider: entry.packageType === 'npm' ? 'npm' : 'pypi',
-    isPrivate: false, // public registries — confirmed on download
-    status: 'queued',
-  };
-}
-
-function entryToScanJobPayload(entry: ParsedEntry, scanJobId: string) {
-  if (entry.packageType === 'git') {
-    return { repoUrl: entry.url, packageType: 'git' as const, scanJobId };
-  }
-  return {
-    repoUrl: entry.url,
-    packageType: entry.packageType,
-    packageName: entry.packageName,
-    packageVersion: entry.packageVersion,
-    scanJobId,
-  };
-}
 
 // ── Routes ────────────────────────────────────────────────────────
 
@@ -121,7 +25,7 @@ router.post('/import/preview', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const text = req.file.buffer.toString('utf-8');
     const rows: string[][] = parse(text, { skip_empty_lines: true, trim: true, relax_column_count: true });
-    const parsed = rows.map(parseRow).filter(Boolean) as ParsedEntry[];
+    const parsed = rows.map(parseCsvRow).filter(Boolean) as ParsedEntry[];
     const urls = parsed.map((p) => p.url);
     const existing = await prisma.repo.findMany({
       where: { url: { in: urls } },
@@ -139,7 +43,7 @@ router.post('/import/preview', upload.single('file'), async (req, res) => {
         packageVersion: entry.packageType !== 'git' ? entry.packageVersion : undefined,
         provider: entry.packageType === 'git'
           ? detectGitProvider(entry.url)
-          : entry.packageType === 'npm' ? 'npm' : 'pypi',
+          : registryProvider(entry.packageType),
         isPrivate: entry.packageType === 'git' ? entry.isPrivate : false,
         exists,
         inQueue: exists && isRepoInScanPipeline(status),
@@ -157,7 +61,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const text = req.file.buffer.toString('utf-8');
     const rows: string[][] = parse(text, { skip_empty_lines: true, trim: true, relax_column_count: true });
-    const parsed = rows.map(parseRow).filter(Boolean) as ParsedEntry[];
+    const parsed = rows.map(parseCsvRow).filter(Boolean) as ParsedEntry[];
 
     // Deduplicate within file
     const seen = new Set<string>();
@@ -211,7 +115,7 @@ const querySchema = z.object({
   search: z.string().optional(),
   status: z.string().optional(),
   provider: z.string().optional(),
-  packageType: z.enum(['all', 'git', 'npm', 'pip']).default('all'),
+  packageType: z.enum(['all', 'git', 'npm', 'pip', 'cargo', 'go', 'gem']).default('all'),
   visibility: z.enum(['public', 'private', 'all']).default('all'),
   sortBy: z.enum(['url', 'status', 'lastScannedAt', 'createdAt']).default('createdAt'),
   sortDir: z.enum(['asc', 'desc']).default('desc'),

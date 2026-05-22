@@ -1,17 +1,25 @@
 // ── Queue job payloads ───────────────────────────────────────────
 
-export type PackageType = 'git' | 'npm' | 'pip';
+export type PackageType = 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'gem';
+
+/** Registry-backed package types (everything except git). */
+export type RegistryPackageType = Exclude<PackageType, 'git'>;
 
 export interface ScanJobData {
   /**
    * Canonical unique key (matches Repo.url):
-   *   git → clone URL,  npm → npm:express[@ver],  pip → pip:requests[@ver]
+   *   git   → clone URL
+   *   npm   → npm:express[@ver]
+   *   pip   → pip:requests[@ver]
+   *   cargo → cargo:serde[@ver]
+   *   go    → go:github.com/org/repo[@ver]
+   *   gem   → gem:rails[@ver]
    */
   repoUrl: string;
   packageType: PackageType;
-  /** npm/pip package name (undefined for git) */
+  /** Registry package name / Go module path (undefined for git) */
   packageName?: string;
-  /** Requested version; undefined means latest (only for npm/pip) */
+  /** Requested version; undefined means latest (registry packages only) */
   packageVersion?: string;
   scanJobId: string;
   forceRescan?: boolean;
@@ -19,35 +27,17 @@ export interface ScanJobData {
 
 export interface SourceAcquisitionInfo {
   packageType: PackageType;
-  /** Clone URL (git), package name (npm/pip), or any target accepted by acquireSource */
+  /** Clone URL (git), package name / module path (registry), or any target accepted by acquireSource */
   target: string;
   version?: string;
-}
-
-export interface CveJobData {
-  repoUrl: string;
-  scanJobId: string;
-  workspacePath: string;
-  /** Forwarded from ScanJobData so exploit workers can re-acquire source on a different host */
-  sourceAcquisition?: SourceAcquisitionInfo;
 }
 
 export interface ExploitJobData {
   vulnId: string;
   scanJobId: string;
   vulnJson: VulnerabilityFinding;
-  /**
-   * Absolute path to the already-cloned workspace on the scanner machine.
-   * May not exist when the exploit worker runs on a different host — use
-   * sourceAcquisition to re-download the source in that case.
-   */
-  workspacePath: string;
-  /**
-   * Source acquisition parameters forwarded from the scan job.
-   * Always present so any exploit worker can re-download the source
-   * if it cannot reach workspacePath.
-   */
-  sourceAcquisition?: SourceAcquisitionInfo;
+  /** Source acquisition parameters — exploit worker always re-downloads independently. */
+  sourceAcquisition: SourceAcquisitionInfo;
 }
 
 // ── CVE Hunter output ────────────────────────────────────────────
@@ -156,7 +146,7 @@ export interface JobProgressEvent {
   jobId: string;
   scanJobId: string;
   repoUrl: string;
-  stage: 'clone' | 'cve-scan' | 'exploit-gen';
+  stage: 'scan' | 'exploit-gen';
   progress: number;
   status: 'active' | 'completed' | 'failed';
   message?: string;
@@ -177,11 +167,14 @@ export interface ApiRepo {
   /**
    * Canonical unique key:
    *   git  → clone URL        e.g.  https://github.com/org/repo
-   *   npm  → npm:{name}[@v]   e.g.  npm:express | npm:express@4.17.21
-   *   pip  → pip:{name}[@v]   e.g.  pip:requests | pip:requests@2.31.0
+   *   npm   → npm:{name}[@v]
+   *   pip   → pip:{name}[@v]
+   *   cargo → cargo:{name}[@v]
+   *   go    → go:{module}[@v]
+   *   gem   → gem:{name}[@v]
    */
   url: string;
-  /** Actual git repo URL discovered from npm/pip registry metadata */
+  /** Actual git repo URL discovered from registry metadata */
   repoUrl: string | null;
   packageName: string | null;
   packageType: PackageType;
@@ -214,6 +207,10 @@ export interface ApiVulnerability {
   id: string;
   scanJobId: string;
   repoUrl: string;
+  /** Discovered git repository URL from registry metadata (null for git repos or when not available) */
+  packageRepoUrl: string | null;
+  /** Package archive download URL from registry (null for git repos or when not available) */
+  packageTarballUrl: string | null;
   checkId: string;
   path: string;
   lineStart: number;
@@ -260,6 +257,8 @@ export interface WorkerConfig {
   id: string;
   scannerConcurrency: number;
   exploitConcurrency: number;
+  /** When false, findings are saved after a scan but NOT auto-queued for exploitation. */
+  autoQueueExploits: boolean;
   exploitMinSeverity: Severity;
   exploitIncludeDropped: boolean;
   dedupWindowHours: number;

@@ -10,4 +10,4 @@ volumes/logs/
 !volumes/**/.gitkeep
 .DS_Store
 data/
-skills
+skills/

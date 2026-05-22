@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "db:generate": "prisma generate --schema=../api/prisma/schema.prisma",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "npm run db:generate && tsc",
     "start": "node dist/index.js",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "npm-packages": "tsx src/npm-packages-cli.ts"
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.13",
@@ -16,6 +18,7 @@
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
     "pino": "^9.2.0",
+    "playwright": "^1.60.0",
     "simple-git": "^3.25.0",
     "uuid": "^14.0.0",
     "zod": "^3.23.8"

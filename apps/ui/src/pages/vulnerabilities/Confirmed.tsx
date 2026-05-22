@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { type ColumnDef } from '@tanstack/react-table';
-import { Copy, Check, Download, Zap, FileText, Eye } from 'lucide-react';
+import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
+import { Copy, Check, Download, Zap, FileText, Eye, X } from 'lucide-react';
 import { Layout } from '../../components/Layout.tsx';
 import { DataTable, Pagination } from '../../components/ui/DataTable.tsx';
 import { Button } from '../../components/ui/Button.tsx';
@@ -100,6 +100,32 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
           <p className="text-xs text-muted-foreground">Repo</p>
           <RepoUrlLink repoUrl={vuln.repoUrl} className="max-w-none text-sm break-all" />
         </div>
+        {vuln.packageRepoUrl && (
+          <div>
+            <p className="text-xs text-muted-foreground">Repo URL</p>
+            <a
+              href={vuln.packageRepoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs break-all text-blue-600 hover:underline"
+            >
+              {vuln.packageRepoUrl}
+            </a>
+          </div>
+        )}
+        {vuln.packageTarballUrl && (
+          <div>
+            <p className="text-xs text-muted-foreground">Package Tarball URL</p>
+            <a
+              href={vuln.packageTarballUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs break-all text-blue-600 hover:underline"
+            >
+              {vuln.packageTarballUrl}
+            </a>
+          </div>
+        )}
         <div>
           <p className="text-xs text-muted-foreground">Location</p>
           <p className="font-mono text-xs">{vuln.path}:{vuln.lineStart}{vuln.lineEnd ? `–${vuln.lineEnd}` : ''}</p>
@@ -243,27 +269,66 @@ export default function Confirmed() {
   const qc = useQueryClient();
   const [page, setPage] = useState(1);
   const [severity, setSeverity] = useState('');
-  const [exploitable, setExploitable] = useState('');
+  const [exploitFilter, setExploitFilter] = useState('');
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<ApiVulnerability | null>(null);
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+
+  const selectedIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
+  const selectedCount = selectedIds.length;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['vulns', page, severity, exploitable, cwe, vulnType, search],
+    queryKey: ['vulns', page, severity, exploitFilter, cwe, vulnType, search],
     queryFn: () => api.getVulnerabilities({
       page,
       pageSize: 20,
       severity,
       repoUrl: search,
-      ...(exploitable ? { exploitable } : {}),
+      ...(exploitFilter ? { exploitStatus: exploitFilter } : {}),
       ...(cwe ? { cwe } : {}),
       ...(vulnType ? { vulnType } : {}),
     }),
     placeholderData: (prev) => prev,
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
 
+  const bulkExploitMutation = useMutation({
+    mutationFn: () => api.bulkExploit({ vulnIds: selectedIds, onlyNew: false }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vulns'] });
+      setRowSelection({});
+    },
+  });
+
+  const handleRowClick = useCallback((row: ApiVulnerability) => {
+    setSelected(row);
+  }, []);
+
   const columns: ColumnDef<ApiVulnerability, unknown>[] = [
+    {
+      id: 'select',
+      header: ({ table }) => (
+        <input
+          type="checkbox"
+          checked={table.getIsAllPageRowsSelected()}
+          ref={(el) => { if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected(); }}
+          onChange={table.getToggleAllPageRowsSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+          title="Select all on this page"
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          onChange={row.getToggleSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+        />
+      ),
+    },
     { header: 'Vuln ID', cell: ({ row }) => (
       <span className="font-mono text-xs" title={row.original.id}>{row.original.id}</span>
     ) },
@@ -287,7 +352,7 @@ export default function Confirmed() {
         if (s === 'done') return <Badge variant="success">Exploitable</Badge>;
         if (s === 'pending' || s === 'generating') return <Badge variant="warning">In progress</Badge>;
         if (s === 'failed') return <Badge variant="destructive">Failed</Badge>;
-        return <Badge variant="outline">Not exploitable</Badge>;
+        return <Badge variant="outline">Not tried</Badge>;
       },
     },
   ];
@@ -303,17 +368,62 @@ export default function Confirmed() {
             <option value="">All severities</option>
             {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => <option key={s} value={s}>{s}</option>)}
           </Select>
-          <Select value={exploitable} onChange={(e) => { setExploitable(e.target.value); setPage(1); }}>
-            <option value="">All exploitability</option>
-            <option value="yes">Exploitable</option>
-            <option value="no">Not exploitable</option>
+          <Select value={exploitFilter} onChange={(e) => { setExploitFilter(e.target.value); setPage(1); }}>
+            <option value="">All exploit states</option>
+            <option value="done">Exploitable</option>
+            <option value="in_progress">In progress</option>
+            <option value="failed">Failed</option>
+            <option value="none">Not tried</option>
           </Select>
         </div>
+
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-4 py-2.5">
+            <span className="text-sm font-medium text-foreground">
+              {selectedCount} {selectedCount === 1 ? 'vulnerability' : 'vulnerabilities'} selected
+            </span>
+            <div className="flex items-center gap-2 ml-auto">
+              {bulkExploitMutation.isSuccess && (
+                <span className="text-xs text-green-600 font-medium">
+                  {bulkExploitMutation.data?.queued ?? 0} queued
+                </span>
+              )}
+              {bulkExploitMutation.isError && (
+                <span className="text-xs text-destructive">
+                  {String(bulkExploitMutation.error)}
+                </span>
+              )}
+              <Button
+                size="sm"
+                loading={bulkExploitMutation.isPending}
+                onClick={() => bulkExploitMutation.mutate()}
+              >
+                <Zap className="w-3.5 h-3.5" />
+                Queue for Exploit
+              </Button>
+              <button
+                onClick={() => setRowSelection({})}
+                className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Clear selection"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" /></div>
         ) : (
           <>
-            <DataTable data={data?.data ?? []} columns={columns} onRowClick={(row) => setSelected(row)} />
+            <DataTable
+              data={data?.data ?? []}
+              columns={columns}
+              onRowClick={handleRowClick}
+              rowSelection={rowSelection}
+              onRowSelectionChange={setRowSelection}
+              getRowId={(row) => row.id}
+            />
             <Pagination page={page} totalPages={data?.totalPages ?? 1} onPage={setPage} total={data?.total ?? 0} pageSize={20} />
           </>
         )}

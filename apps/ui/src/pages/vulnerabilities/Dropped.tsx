@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef } from '@tanstack/react-table';
 import { Layout } from '../../components/Layout.tsx';
@@ -8,6 +8,7 @@ import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { Badge } from '../../components/ui/Badge.tsx';
 import { ConfirmDialog } from '../../components/ui/Dialog.tsx';
+import { DroppedVulnDetail } from '../../components/DroppedVulnDetail.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { formatDate, formatFileLine } from '../../lib/utils.ts';
@@ -22,6 +23,11 @@ export default function Dropped() {
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<ApiVulnerability | null>(null);
+
+  const handleRowClick = useCallback((row: ApiVulnerability) => {
+    setSelected(row);
+  }, []);
 
   const { data, isLoading } = useQuery({
     queryKey: ['dropped-vulns', page, dropReason, cwe, vulnType, search],
@@ -48,7 +54,7 @@ export default function Dropped() {
 
   const columns: ColumnDef<ApiVulnerability, unknown>[] = [
     { header: 'Vuln ID', cell: ({ row }) => (
-      <span className="font-mono text-xs" title={row.original.id}>{row.original.id}</span>
+      <span className="font-mono text-xs" title="Click row for details">{row.original.id}</span>
     ) },
     { header: 'CWE', cell: ({ row }) => <span className="font-mono text-xs">{row.original.cwe}</span> },
     { header: 'File:Line', cell: ({ row }) => (
@@ -111,11 +117,19 @@ export default function Dropped() {
           <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" /></div>
         ) : (
           <>
-            <DataTable data={data?.data ?? []} columns={columns} />
+            <DataTable data={data?.data ?? []} columns={columns} onRowClick={handleRowClick} />
             <Pagination page={page} totalPages={data?.totalPages ?? 1} onPage={setPage} total={data?.total ?? 0} pageSize={20} />
           </>
         )}
       </div>
+      {selected && (
+        <DroppedVulnDetail
+          vuln={selected}
+          onClose={() => setSelected(null)}
+          onPromote={() => promote.mutate(selected.id, { onSuccess: () => setSelected(null) })}
+          promoteLoading={promote.isPending}
+        />
+      )}
     </Layout>
   );
 }

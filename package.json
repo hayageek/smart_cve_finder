@@ -13,7 +13,8 @@
     "db:migrate": "npm run db:migrate --workspace=apps/api",
     "db:generate": "npm run db:generate --workspace=apps/api",
     "scan": "npm run cli --workspace=apps/workers --",
-    "cli": "npm run cli --workspace=apps/workers --"
+    "cli": "npm run cli --workspace=apps/workers --",
+    "npm-packages": "npm run npm-packages --workspace=apps/workers --"
   },
   "engines": {
     "node": ">=20"

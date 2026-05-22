@@ -17,9 +17,11 @@ model Repo {
   url            String    @unique
   // Discovered git repository URL from npm/pip registry metadata (null for git repos)
   repoUrl        String?
+  // Package tarball download URL from npm/pip registry (null for git repos)
+  tarballUrl     String?
   // Package-specific fields (null for git repos)
   packageName    String?
-  packageType    String    @default("git")   // git | npm | pip
+  packageType    String    @default("git")   // git | npm | pip | cargo | go | gem
   packageVersion String?                     // resolved version after download
   provider       String    // github | bitbucket | gitlab | npm | pypi | other
   isPrivate      Boolean   @default(false)
@@ -99,7 +101,10 @@ model WorkerConfig {
   id                    String   @id @default(cuid())
   scannerConcurrency    Int      @default(3)
   exploitConcurrency    Int      @default(2)
-  exploitMinSeverity    String   @default("HIGH")
+  // When false, findings are saved but NOT automatically queued for exploitation.
+  // Queue manually from the dashboard. When true, auto-queue findings at or above exploitMinSeverity.
+  autoQueueExploits     Boolean  @default(true)
+  exploitMinSeverity    String   @default("CRITICAL")
   exploitIncludeDropped Boolean  @default(false)
   dedupWindowHours      Int      @default(24)
   workspaceCleanupHours Int      @default(48)

@@ -3,7 +3,8 @@ import {
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
-  type TableOptions,
+  type OnChangeFn,
+  type RowSelectionState,
 } from '@tanstack/react-table';
 import { cn } from '../../lib/utils.ts';
 
@@ -12,13 +13,32 @@ interface DataTableProps<T> {
   columns: ColumnDef<T, unknown>[];
   onRowClick?: (row: T) => void;
   className?: string;
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>;
+  getRowId?: (row: T, index: number) => string;
 }
 
-export function DataTable<T>({ data, columns, onRowClick, className }: DataTableProps<T>) {
+export function DataTable<T>({
+  data,
+  columns,
+  onRowClick,
+  className,
+  rowSelection,
+  onRowSelectionChange,
+  getRowId,
+}: DataTableProps<T>) {
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    ...(rowSelection !== undefined
+      ? {
+          state: { rowSelection },
+          onRowSelectionChange,
+          enableRowSelection: true,
+          getRowId,
+        }
+      : {}),
   });
 
   return (
