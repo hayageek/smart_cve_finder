@@ -92,14 +92,40 @@ interface PaginationProps {
   onPage: (p: number) => void;
   total: number;
   pageSize: number;
+  pageSizeOptions?: number[];
+  onPageSizeChange?: (size: number) => void;
 }
 
-export function Pagination({ page, totalPages, onPage, total, pageSize }: PaginationProps) {
+export function Pagination({
+  page,
+  totalPages,
+  onPage,
+  total,
+  pageSize,
+  pageSizeOptions,
+  onPageSizeChange,
+}: PaginationProps) {
   const from = (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
   return (
     <div className="flex items-center justify-between mt-3 text-sm text-muted-foreground">
-      <span>{total > 0 ? `${from}–${to} of ${total}` : '0 results'}</span>
+      <div className="flex items-center gap-3">
+        <span>{total > 0 ? `${from}–${to} of ${total}` : '0 results'}</span>
+        {pageSizeOptions && onPageSizeChange && (
+          <label className="flex items-center gap-1.5">
+            <span>Rows per page</span>
+            <select
+              value={pageSize}
+              onChange={(e) => onPageSizeChange(Number(e.target.value))}
+              className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            >
+              {pageSizeOptions.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
       <div className="flex gap-1">
         <button onClick={() => onPage(1)} disabled={page === 1} className="px-2 py-1 rounded border border-border disabled:opacity-40 hover:bg-accent">«</button>
         <button onClick={() => onPage(page - 1)} disabled={page === 1} className="px-2 py-1 rounded border border-border disabled:opacity-40 hover:bg-accent">‹</button>

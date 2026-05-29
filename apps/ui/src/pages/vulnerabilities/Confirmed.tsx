@@ -7,11 +7,12 @@ import { DataTable, Pagination } from '../../components/ui/DataTable.tsx';
 import { Button } from '../../components/ui/Button.tsx';
 import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
-import { SeverityBadge, Badge } from '../../components/ui/Badge.tsx';
-import { Modal } from '../../components/ui/Dialog.tsx';
+import { SeverityBadge, Badge, ExploitStatusIcon } from '../../components/ui/Badge.tsx';
+import { Modal, VULN_DETAIL_MODAL_SIZE_KEY } from '../../components/ui/Dialog.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { ReportViewerModal } from '../../components/ReportViewerModal.tsx';
+import { Tooltip } from '../../components/ui/Tooltip.tsx';
 import { formatDate, formatFileLine } from '../../lib/utils.ts';
 import type { ApiVulnerability } from '@secscan/shared';
 
@@ -77,12 +78,19 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
 
   return (
     <>
-    <Modal open={true} title="Vulnerability Detail" onClose={onClose}>
+    <Modal
+      open={true}
+      title="Vulnerability Detail"
+      onClose={onClose}
+      resizable
+      sizeStorageKey={VULN_DETAIL_MODAL_SIZE_KEY}
+    >
       <div className="space-y-4 text-sm">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
           <SeverityBadge severity={vuln.severity} />
           <span className="font-mono text-xs text-muted-foreground">{vuln.cwe}</span>
+          {vuln.isFalsePositive && <Badge variant="secondary">False Positive</Badge>}
           {vuln.cvssScore !== null && (
             <Badge variant="outline">CVSS {vuln.cvssScore}</Badge>
           )}
@@ -265,11 +273,16 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
   );
 }
 
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 50;
+
 export default function Confirmed() {
   const qc = useQueryClient();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [severity, setSeverity] = useState('');
   const [exploitFilter, setExploitFilter] = useState('');
+  const [fpFilter, setFpFilter] = useState('');
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
@@ -280,13 +293,14 @@ export default function Confirmed() {
   const selectedCount = selectedIds.length;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['vulns', page, severity, exploitFilter, cwe, vulnType, search],
+    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, search],
     queryFn: () => api.getVulnerabilities({
       page,
-      pageSize: 20,
+      pageSize,
       severity,
       repoUrl: search,
       ...(exploitFilter ? { exploitStatus: exploitFilter } : {}),
+      ...(fpFilter ? { falsePositive: fpFilter } : {}),
       ...(cwe ? { cwe } : {}),
       ...(vulnType ? { vulnType } : {}),
     }),
@@ -346,14 +360,19 @@ export default function Confirmed() {
     { header: 'Repo', cell: ({ row }) => <RepoUrlLink repoUrl={row.original.repoUrl} /> },
     { header: 'Found', cell: ({ row }) => <span className="text-xs text-muted-foreground">{formatDate(row.original.createdAt)}</span> },
     {
-      header: 'Exploit',
-      cell: ({ row }) => {
-        const s = row.original.exploitStatus;
-        if (s === 'done') return <Badge variant="success">Exploitable</Badge>;
-        if (s === 'pending' || s === 'generating') return <Badge variant="warning">In progress</Badge>;
-        if (s === 'failed') return <Badge variant="destructive">Failed</Badge>;
-        return <Badge variant="outline">Not tried</Badge>;
-      },
+      header: 'FP',
+      cell: ({ row }) => row.original.isFalsePositive
+        ? <Badge variant="secondary">Yes</Badge>
+        : <span className="text-xs text-muted-foreground">—</span>,
+    },
+    {
+      id: 'exploit',
+      header: () => (
+        <Tooltip content="Exploit status">
+          <Zap className="w-4 h-4" aria-label="Exploit status" />
+        </Tooltip>
+      ),
+      cell: ({ row }) => <ExploitStatusIcon status={row.original.exploitStatus} />,
     },
   ];
 
@@ -374,6 +393,11 @@ export default function Confirmed() {
             <option value="in_progress">In progress</option>
             <option value="failed">Failed</option>
             <option value="none">Not tried</option>
+          </Select>
+          <Select value={fpFilter} onChange={(e) => { setFpFilter(e.target.value); setPage(1); }}>
+            <option value="">All false positives</option>
+            <option value="yes">False positive only</option>
+            <option value="no">Exclude false positives</option>
           </Select>
         </div>
 
@@ -424,7 +448,15 @@ export default function Confirmed() {
               onRowSelectionChange={setRowSelection}
               getRowId={(row) => row.id}
             />
-            <Pagination page={page} totalPages={data?.totalPages ?? 1} onPage={setPage} total={data?.total ?? 0} pageSize={20} />
+            <Pagination
+              page={page}
+              totalPages={data?.totalPages ?? 1}
+              onPage={setPage}
+              total={data?.total ?? 0}
+              pageSize={pageSize}
+              pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            />
           </>
         )}
       </div>

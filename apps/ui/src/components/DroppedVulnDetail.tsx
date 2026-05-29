@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Copy, Check } from 'lucide-react';
-import { Modal } from './ui/Dialog.tsx';
+import { Modal, VULN_DETAIL_MODAL_SIZE_KEY } from './ui/Dialog.tsx';
 import { Button } from './ui/Button.tsx';
 import { SeverityBadge, Badge } from './ui/Badge.tsx';
 import { RepoUrlLink } from './RepoUrlLink.tsx';
@@ -39,7 +39,13 @@ export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading }: 
   };
 
   return (
-    <Modal open={true} title="Dropped Finding Detail" onClose={onClose} className="max-w-xl">
+    <Modal
+      open={true}
+      title="Dropped Finding Detail"
+      onClose={onClose}
+      resizable
+      sizeStorageKey={VULN_DETAIL_MODAL_SIZE_KEY}
+    >
       <div className="space-y-4 text-sm">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">

@@ -15,10 +15,13 @@ import { formatDate, formatFileLine } from '../../lib/utils.ts';
 import type { ApiVulnerability } from '@secscan/shared';
 
 const DROP_REASONS = ['severity-below-high', 'excluded-path', 'false-positive-heuristic', 'low-confidence'];
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 50;
 
 export default function Dropped() {
   const qc = useQueryClient();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [dropReason, setDropReason] = useState('');
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
@@ -30,10 +33,10 @@ export default function Dropped() {
   }, []);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dropped-vulns', page, dropReason, cwe, vulnType, search],
+    queryKey: ['dropped-vulns', page, pageSize, dropReason, cwe, vulnType, search],
     queryFn: () => api.getDroppedVulns({
       page,
-      pageSize: 20,
+      pageSize,
       dropReason,
       repoUrl: search,
       ...(cwe ? { cwe } : {}),
@@ -118,7 +121,15 @@ export default function Dropped() {
         ) : (
           <>
             <DataTable data={data?.data ?? []} columns={columns} onRowClick={handleRowClick} />
-            <Pagination page={page} totalPages={data?.totalPages ?? 1} onPage={setPage} total={data?.total ?? 0} pageSize={20} />
+            <Pagination
+              page={page}
+              totalPages={data?.totalPages ?? 1}
+              onPage={setPage}
+              total={data?.total ?? 0}
+              pageSize={pageSize}
+              pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            />
           </>
         )}
       </div>
