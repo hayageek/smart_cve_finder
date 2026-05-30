@@ -56,8 +56,8 @@ npm install
 # Build shared types
 npm run build --workspace=packages/shared
 
-# Generate Prisma client + migrate
-cd apps/api && npx prisma db push && cd ../..
+# Generate Prisma client + apply schema (uses project Prisma 5, not global npx)
+npm run db:push
 
 # Run API, workers, and UI in separate terminals
 npm run dev:api      # http://localhost:4000

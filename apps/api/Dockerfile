@@ -14,7 +14,7 @@ RUN npm run build --workspace=packages/shared
 
 # Build API
 COPY apps/api ./apps/api
-RUN npx prisma generate --schema=apps/api/prisma/schema.prisma
+RUN npm exec -- prisma generate --schema=apps/api/prisma/schema.prisma
 RUN npm run build --workspace=apps/api
 
 FROM node:24-alpine AS runner
@@ -28,4 +28,4 @@ COPY apps/api/prisma ./apps/api/prisma
 WORKDIR /app
 ENV NODE_ENV=production
 EXPOSE 4000
-CMD ["sh", "-c", "npx prisma db push --schema=apps/api/prisma/schema.prisma --accept-data-loss && node apps/api/dist/index.js"]
+CMD ["sh", "-c", "npm exec -- prisma db push --schema=apps/api/prisma/schema.prisma --accept-data-loss && node apps/api/dist/index.js"]

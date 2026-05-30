@@ -224,10 +224,13 @@ export const scanWorker = new Worker<ScanJobData>(
       try {
         ({ findings, drops, rawOutput: rawCveOutput } = await runCveScan(
           {
-            cwd:    workspacePath,
-            model:  config.CURSOR_AGENT_MODEL,
-            apiKey: config.CURSOR_API_KEY,
-            debug:  config.DEBUG_CURSOR,
+            cwd:              workspacePath,
+            model:            config.CURSOR_AGENT_MODEL,
+            apiKey:           config.CURSOR_API_KEY,
+            debug:            config.DEBUG_CURSOR,
+            semgrepEnabled:   config.CVE_SEMGREP_ENABLED,
+            semgrepBin:       config.CVE_SEMGREP_BIN,
+            semgrepJobs:      config.CVE_SEMGREP_JOBS,
           },
           pipelineLog,
         ));

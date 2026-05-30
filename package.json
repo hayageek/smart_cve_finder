@@ -12,11 +12,16 @@
     "build": "npm run build --workspaces --if-present",
     "db:migrate": "npm run db:migrate --workspace=apps/api",
     "db:generate": "npm run db:generate --workspace=apps/api",
+    "db:push": "node --env-file=.env ./node_modules/.bin/prisma db push --schema=apps/api/prisma/schema.prisma",
     "scan": "npm run cli --workspace=apps/workers --",
     "cli": "npm run cli --workspace=apps/workers --",
     "npm-packages": "npm run npm-packages --workspace=apps/workers --"
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "prisma": "5.22.0",
+    "@prisma/client": "5.22.0"
   }
 }

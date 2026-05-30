@@ -241,11 +241,14 @@ async function runScan() {
   try {
     ({ findings, drops } = await runCveScan(
       {
-        cwd:     workspacePath,
-        model:   opts.model,
-        apiKey:  opts.apiKey,
-        debug:   opts.debug,
-        onChunk: (chunk) => process.stdout.write(chunk),
+        cwd:              workspacePath,
+        model:            opts.model,
+        apiKey:           opts.apiKey,
+        debug:            opts.debug,
+        onChunk:          (chunk) => process.stdout.write(chunk),
+        semgrepEnabled:   process.env.CVE_SEMGREP_ENABLED !== 'false',
+        semgrepBin:       process.env.CVE_SEMGREP_BIN ?? 'semgrep',
+        semgrepJobs:      process.env.CVE_SEMGREP_JOBS ? Number(process.env.CVE_SEMGREP_JOBS) : undefined,
       },
       plog,
     ));

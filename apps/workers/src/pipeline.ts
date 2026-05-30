@@ -14,6 +14,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { simpleGit } from 'simple-git';
 import type { VulnerabilityFinding, DroppedFinding, PackageType, RegistryPackageType } from '@secscan/shared';
+import { runSemgrepScan } from '@secscan/cve-semgrep';
 import { runCursorSkill } from './cursor-runner.js';
 import type { RunSkillOptions } from './cursor-runner.js';
 
@@ -693,7 +694,19 @@ export async function collectArtifactsFromWorkspace(
 
 // ── runCveScan ────────────────────────────────────────────────────
 
-export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {}
+/** Empty cve-pattern-hunter JSON blocks returned when the Semgrep gate skips the agent. */
+export const EMPTY_CVE_SCAN_OUTPUT =
+  '<<<CVE_HUNTER_FINDINGS_JSON>>>\n[]\n<<<END_CVE_HUNTER_FINDINGS_JSON>>>\n' +
+  '<<<CVE_HUNTER_DROPS_JSON>>>\n[]\n<<<END_CVE_HUNTER_DROPS_JSON>>>';
+
+export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
+  /** Run the Semgrep candidate scan before the agent (default: true). */
+  semgrepEnabled?: boolean;
+  /** Semgrep binary (default: semgrep). */
+  semgrepBin?: string;
+  /** Parallelism passed to `semgrep --jobs`. */
+  semgrepJobs?: number;
+}
 
 export interface CveScanResult {
   findings: VulnerabilityFinding[];
@@ -703,14 +716,62 @@ export interface CveScanResult {
 
 /**
  * Run the cve-pattern-hunter skill against a workspace and return parsed findings.
+ *
+ * Semgrep is the mandatory front gate: it enumerates candidate sinks and is the
+ * required input for the cve-pattern-hunter skill. **If Semgrep produces no
+ * matches the cursor scan does not run** — the skill has nothing to verify.
+ *
  * Used by both the BullMQ scanWorker and the CLI's `scan` command.
  */
 export async function runCveScan(
   opts: CveScanOptions,
   log: PipelineLogger = noopLogger,
 ): Promise<CveScanResult> {
+  const semgrepOn = opts.semgrepEnabled !== false;
+
+  if (!semgrepOn) {
+    log.warn('Semgrep gate disabled — no candidate list to verify; skipping cve-pattern-hunter');
+    return { findings: [], drops: [], rawOutput: EMPTY_CVE_SCAN_OUTPUT };
+  }
+
+  const semgrep = await runSemgrepScan({
+    cwd: opts.cwd,
+    semgrepBin: opts.semgrepBin,
+    jobs: opts.semgrepJobs,
+  });
+
+  if (semgrep.skippedReason) {
+    log.warn(`Semgrep scan: ${semgrep.skippedReason}`);
+  }
+
+  if (semgrep.matches.length === 0) {
+    log.info(
+      `Semgrep scan: no candidate sinks (scanned languages: ${semgrep.languagesScanned.join(', ') || 'none'}); skipping cve-pattern-hunter`,
+    );
+    return { findings: [], drops: [], rawOutput: EMPTY_CVE_SCAN_OUTPUT };
+  }
+
+  const sample = semgrep.matches
+    .slice(0, 3)
+    .map((m) => `${m.file}:${m.line} (${m.language}/${m.patternId})`)
+    .join('; ');
+  log.info(`Semgrep scan: ${semgrep.matches.length} candidate(s) — ${sample}${semgrep.matches.length > 3 ? '…' : ''}`);
+
+  // The cve-pattern-hunter skill is driven entirely by the Semgrep candidate
+  // list — pass it verbatim as the prompt suffix so the agent only verifies
+  // these sinks instead of re-enumerating them.
+  const candidateJson = JSON.stringify(
+    { matches: semgrep.matches, languagesScanned: semgrep.languagesScanned },
+    null,
+    2,
+  );
+
   const result = await runCursorSkill({
-    skillPath: `Follow the "cve-pattern-hunter" skill instructions to find security vulnerabilities.\nWorkspace: ${opts.cwd}`,
+    skillPath:
+      `Follow the "cve-pattern-hunter" skill instructions to verify the Semgrep candidate vulnerabilities below and prune false positives.\n` +
+      `Workspace: ${opts.cwd}\n` +
+      `Semgrep candidate list:`,
+    promptSuffix: candidateJson,
     cwd:       opts.cwd,
     model:     opts.model,
     apiKey:    opts.apiKey,

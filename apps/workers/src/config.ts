@@ -32,6 +32,11 @@ const schema = z.object({
   CURSOR_API_KEY: z.string().optional(),
   // Set to "true" to log the full prompt and result text from @cursor/sdk calls
   DEBUG_CURSOR: z.string().transform((v) => v === 'true').default('false'),
+  // Semgrep candidate gate before cve-pattern-hunter (requires `semgrep` on PATH).
+  // No Semgrep matches → cve-pattern-hunter (cursor scan) is skipped entirely.
+  CVE_SEMGREP_ENABLED: z.string().transform((v) => v !== 'false').default('true'),
+  CVE_SEMGREP_BIN: z.string().default('semgrep'),
+  CVE_SEMGREP_JOBS: z.coerce.number().optional(),
   SCANNER_CONCURRENCY: z.coerce.number().default(3),
   SCANNER_MAX_ATTEMPTS: z.coerce.number().default(2),
   SCANNER_BACKOFF_DELAY_MS: z.coerce.number().default(10000),
