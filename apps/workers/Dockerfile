@@ -21,14 +21,16 @@ RUN npm exec -- prisma generate --schema=apps/api/prisma/schema.prisma
 RUN npm run build --workspace=apps/workers
 
 # ── Runtime image ────────────────────────────────────────────────
-FROM node:24-slim AS runner
+# Alpine (musl) — semgrep's manylinux/glibc wheels SIGILL on arm64 Docker
+# (Apple Silicon); musllinux wheels from pip work reliably here.
+FROM node:24-alpine AS runner
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git openssl ca-certificates unzip tar ripgrep python3 python3-pip python3-venv \
+RUN apk add --no-cache \
+    git openssl ca-certificates unzip tar ripgrep python3 py3-pip \
     && python3 -m venv /opt/semgrep \
     && /opt/semgrep/bin/pip install --no-cache-dir semgrep \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /root/.cache/pip
 ENV PATH="/opt/semgrep/bin:${PATH}"
 
 COPY --from=base /app/node_modules ./node_modules
