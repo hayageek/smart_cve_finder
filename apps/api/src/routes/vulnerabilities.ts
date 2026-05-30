@@ -7,6 +7,7 @@ import { emitActivityEvent } from '../sockets/index.js';
 import {
   saveFindingArtifacts,
   saveFindingArtifactBuffers,
+  deleteFindingArtifacts,
 } from '../services/artifacts.js';
 import { getNextUnexploitedFinding, setFindingExploitable } from '../services/findings.js';
 import type { PackageType } from '@secscan/shared';
@@ -495,6 +496,20 @@ router.post('/bulk-exploit', async (req, res) => {
     }
 
     res.json({ queued: vulns.length });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const vuln = await prisma.vulnerability.findUnique({ where: { id: req.params.id } });
+    if (!vuln) return res.status(404).json({ error: 'Not found' });
+
+    deleteFindingArtifacts(vuln);
+    await prisma.vulnerability.delete({ where: { id: vuln.id } });
+
+    res.json({ ok: true, id: vuln.id });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -3,6 +3,7 @@ import { prisma } from '../db/client.js';
 import {
   artifactAbsolutePath,
   findingArtifactsDir,
+  resolveArtifactPath,
   storedArtifactRelPath,
   type ArtifactFilename,
 } from '../lib/artifact-files.js';
@@ -142,6 +143,24 @@ export async function saveFindingArtifacts(findingId: string, input: SaveArtifac
   }
 
   return persistArtifactPaths(findingId, updates);
+}
+
+export function deleteFindingArtifacts(vuln: {
+  id: string;
+  reportPath: string | null;
+  exploitPath: string | null;
+  payloadPath: string | null;
+}): void {
+  const names: ArtifactFilename[] = ['report.md', 'exploit.py', 'payload.py'];
+  const stored = [vuln.reportPath, vuln.exploitPath, vuln.payloadPath];
+  for (let i = 0; i < names.length; i++) {
+    const p = stored[i];
+    if (!p) continue;
+    const abs = resolveArtifactPath(vuln.id, names[i]!, p);
+    if (abs) fs.rmSync(abs, { force: true });
+  }
+  const dir = findingArtifactsDir(vuln.id);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
 }
 
 /** Decode optional base64 fields from MCP (prefix data: or raw base64). */

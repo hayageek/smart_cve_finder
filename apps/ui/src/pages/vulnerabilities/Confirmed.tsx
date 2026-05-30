@@ -1,14 +1,14 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
-import { Copy, Check, Download, Zap, FileText, Eye, X } from 'lucide-react';
+import { Copy, Check, Download, Zap, FileText, Eye, X, Trash2 } from 'lucide-react';
 import { Layout } from '../../components/Layout.tsx';
 import { DataTable, Pagination } from '../../components/ui/DataTable.tsx';
 import { Button } from '../../components/ui/Button.tsx';
 import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { SeverityBadge, Badge, ExploitStatusIcon } from '../../components/ui/Badge.tsx';
-import { Modal, VULN_DETAIL_MODAL_SIZE_KEY } from '../../components/ui/Dialog.tsx';
+import { Modal, ConfirmDialog, VULN_DETAIL_MODAL_SIZE_KEY } from '../../components/ui/Dialog.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { ReportViewerModal } from '../../components/ReportViewerModal.tsx';
@@ -46,7 +46,16 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vulns'] }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => api.deleteVulnerability(vuln.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vulns'] });
+      onClose();
+    },
+  });
+
   const hasArtifacts = !!(vuln.reportPath || vuln.exploitPath || vuln.payloadPath);
+  const needsDeleteConfirm = vuln.exploitStatus !== null || hasArtifacts;
 
   const copyFindingId = async () => {
     try {
@@ -265,6 +274,36 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${vuln.isFalsePositive ? 'translate-x-4' : ''}`} />
             </button>
           </div>
+          {needsDeleteConfirm ? (
+            <ConfirmDialog
+              title="Delete Vulnerability"
+              description="This finding has been exploited or has report/artifact files. Deleting will permanently remove the record and all associated files."
+              confirmText="Delete"
+              onConfirm={async () => { await deleteMutation.mutateAsync(); }}
+            >
+              {(open) => (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="w-full"
+                  loading={deleteMutation.isPending}
+                  onClick={open}
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </Button>
+              )}
+            </ConfirmDialog>
+          ) : (
+            <Button
+              size="sm"
+              variant="destructive"
+              className="w-full"
+              loading={deleteMutation.isPending}
+              onClick={() => deleteMutation.mutate()}
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </Button>
+          )}
         </div>
       </div>
     </Modal>
@@ -308,7 +347,7 @@ export default function Confirmed() {
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
 
   const bulkExploitMutation = useMutation({
-    mutationFn: () => api.bulkExploit({ vulnIds: selectedIds, onlyNew: false }),
+    mutationFn: () => api.bulkExploit({ vulnIds: selectedIds, onlyNew: true }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vulns'] });
       setRowSelection({});
