@@ -34,6 +34,9 @@ const schema = z.object({
   MCP_PATH: z.string().default('/mcp'),
   MCP_PUBLIC_URL: z.string().optional(),
   MCP_SERVER_NAME: z.string().default('secscan'),
+  GITHUB_TOKEN: z.string().optional(),
+  SCAN_MIN_STARS: z.coerce.number().default(100),
+  SCAN_REQUIRE_PVR: z.string().transform((v) => v === 'true').default('false'),
 });
 
 const parsed = schema.safeParse(process.env);

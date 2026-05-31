@@ -15,7 +15,8 @@
     "db:push": "node --env-file=.env ./node_modules/.bin/prisma db push --schema=apps/api/prisma/schema.prisma",
     "scan": "npm run cli --workspace=apps/workers --",
     "cli": "npm run cli --workspace=apps/workers --",
-    "npm-packages": "npm run npm-packages --workspace=apps/workers --"
+    "npm-packages": "npm run npm-packages --workspace=apps/workers --",
+    "github-pvr": "npm run github-pvr --workspace=apps/workers --"
   },
   "engines": {
     "node": ">=20"

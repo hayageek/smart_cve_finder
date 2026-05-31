@@ -87,6 +87,8 @@ export const api = {
   getVulnerability: (id: string) => request<unknown>(`/api/vulnerabilities/${id}`),
   setFalsePositive: (id: string, value: boolean) =>
     request<unknown>(`/api/vulnerabilities/${id}/false-positive`, { method: 'PATCH', body: JSON.stringify({ value }) }),
+  setCveReported: (id: string, value: boolean) =>
+    request<unknown>(`/api/vulnerabilities/${id}/cve-reported`, { method: 'PATCH', body: JSON.stringify({ value }) }),
   generateExploit: (id: string) =>
     request<unknown>(`/api/vulnerabilities/${id}/generate-exploit`, { method: 'POST' }),
   bulkExploit: (body: { vulnIds: string[]; onlyNew?: boolean }) =>

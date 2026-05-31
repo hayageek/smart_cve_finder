@@ -51,6 +51,11 @@ const schema = z.object({
   NOTIFY_WEBHOOK_URL: z.string().optional(),
   NOTIFY_ON_CRITICAL: z.string().transform((v) => v !== 'false').default('true'),
   NOTIFY_ON_SCAN_COMPLETE: z.string().transform((v) => v === 'true').default('false'),
+  GITHUB_TOKEN: z.string().optional(),
+  /** Minimum GitHub stars to run a scan; 0 disables the check. */
+  SCAN_MIN_STARS: z.coerce.number().default(100),
+  /** When true, skip GitHub repos without private vulnerability reporting enabled. */
+  SCAN_REQUIRE_PVR: z.string().transform((v) => v === 'true').default('false'),
 });
 
 const parsed = schema.safeParse(process.env);

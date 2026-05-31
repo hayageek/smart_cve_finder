@@ -233,6 +233,9 @@ export interface ApiVulnerability {
   message: string | null;
   metadataJson: Record<string, unknown> | null;
   isFalsePositive: boolean;
+  /** Reported/disclosed as CVE (workflow complete). */
+  cveReported: boolean;
+  cveReportedAt: string | null;
   cvssScore: number | null;
   // dropped findings live in the same table; dropped=false means confirmed
   dropped: boolean;
@@ -246,6 +249,11 @@ export interface ApiVulnerability {
   exploitError: string | null;
   exploitAttempts: number | null;
   createdAt: string;
+  /** GitHub stargazers (from linked repo; null if unknown or non-GitHub). */
+  githubStars: number | null;
+  githubForks: number | null;
+  /** Private vulnerability reporting ("Report a vulnerability") on the linked GitHub repo. */
+  privateVulnerabilityReportingEnabled: boolean | null;
 }
 
 export interface ApiExploitResult {

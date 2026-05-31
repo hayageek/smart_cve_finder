@@ -139,16 +139,16 @@ export async function resolvePip(packageName: string, version?: string): Promise
   };
   const sdist = meta.urls.find((u) => u.packagetype === 'sdist');
   if (!sdist) throw new Error(`No source distribution found for pip package "${packageName}"`);
-  const repoUrl =
+  const repoUrl = normaliseRepoUrl(
     meta.info.project_urls?.['Source'] ??
-    meta.info.project_urls?.['Repository'] ??
-    meta.info.project_urls?.['Homepage'] ??
-    meta.info.home_page ??
-    null;
+      meta.info.project_urls?.['Repository'] ??
+      meta.info.project_urls?.['Homepage'] ??
+      meta.info.home_page,
+  );
   return {
     resolvedVersion: meta.info.version,
     tarballUrl: sdist.url,
-    repoUrl: repoUrl ?? null,
+    repoUrl,
     archiveFormat: 'tgz',
   };
 }
@@ -286,7 +286,8 @@ export async function resolveGem(gemName: string, version?: string): Promise<Reg
   };
 }
 
-async function resolveRegistryPackage(
+/** Resolve registry metadata without downloading the package archive. */
+export async function resolveRegistryPackage(
   packageType: RegistryPackageType,
   target: string,
   version?: string,

@@ -16,6 +16,7 @@ interface DataTableProps<T> {
   rowSelection?: RowSelectionState;
   onRowSelectionChange?: OnChangeFn<RowSelectionState>;
   getRowId?: (row: T, index: number) => string;
+  getRowClassName?: (row: T) => string;
 }
 
 export function DataTable<T>({
@@ -26,6 +27,7 @@ export function DataTable<T>({
   rowSelection,
   onRowSelectionChange,
   getRowId,
+  getRowClassName,
 }: DataTableProps<T>) {
   const table = useReactTable({
     data,
@@ -70,6 +72,7 @@ export function DataTable<T>({
                 className={cn(
                   'border-t border-border transition-colors',
                   onRowClick && 'cursor-pointer hover:bg-accent/50',
+                  getRowClassName?.(row.original),
                 )}
               >
                 {row.getVisibleCells().map((cell) => (

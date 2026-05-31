@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
-import { Copy, Check, Download, Zap, FileText, Eye, X, Trash2 } from 'lucide-react';
+import { Copy, Check, Download, Zap, FileText, Eye, X, Trash2, CircleCheck } from 'lucide-react';
 import { Layout } from '../../components/Layout.tsx';
 import { DataTable, Pagination } from '../../components/ui/DataTable.tsx';
 import { Button } from '../../components/ui/Button.tsx';
@@ -16,6 +16,36 @@ import { Tooltip } from '../../components/ui/Tooltip.tsx';
 import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.ts';
 import type { ApiVulnerability } from '@secscan/shared';
 
+function CveReportedCell({
+  vuln,
+  onUpdated,
+}: {
+  vuln: ApiVulnerability;
+  onUpdated: () => void;
+}) {
+  const mutation = useMutation({
+    mutationFn: (val: boolean) => api.setCveReported(vuln.id, val),
+    onSuccess: onUpdated,
+  });
+
+  return (
+    <Button
+      size="sm"
+      variant={vuln.cveReported ? 'secondary' : 'outline'}
+      loading={mutation.isPending}
+      onClick={(e) => {
+        e.stopPropagation();
+        mutation.mutate(!vuln.cveReported);
+      }}
+      title={vuln.cveReported ? 'Unmark CVE reported' : 'Mark as reported CVE'}
+      className="h-7 text-xs"
+    >
+      <CircleCheck className="w-3.5 h-3.5" />
+      {vuln.cveReported ? 'Done' : 'Mark'}
+    </Button>
+  );
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -24,11 +54,32 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => void }) {
+function VulnDetail({
+  vuln: vulnProp,
+  onClose,
+  onVulnChange,
+}: {
+  vuln: ApiVulnerability;
+  onClose: () => void;
+  onVulnChange?: (vuln: ApiVulnerability) => void;
+}) {
   const qc = useQueryClient();
+  const [vuln, setVuln] = useState(vulnProp);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+
+  useEffect(() => {
+    setVuln(vulnProp);
+  }, [vulnProp]);
+
+  const patchVuln = useCallback((patch: Partial<ApiVulnerability>) => {
+    setVuln((prev) => {
+      const next = { ...prev, ...patch };
+      onVulnChange?.(next);
+      return next;
+    });
+  }, [onVulnChange]);
   const meta = (vuln.metadataJson ?? {}) as {
     dataflow_steps?: string[]; confidence_reasons?: string[];
     trust_boundary?: string; requires_auth?: string; requires_misconfig?: boolean;
@@ -38,7 +89,22 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
 
   const fpMutation = useMutation({
     mutationFn: (val: boolean) => api.setFalsePositive(vuln.id, val),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['vulns'] }),
+    onSuccess: (_data, value) => {
+      patchVuln({ isFalsePositive: value });
+      qc.invalidateQueries({ queryKey: ['vulns'] });
+    },
+  });
+
+  const cveReportedMutation = useMutation({
+    mutationFn: (val: boolean) => api.setCveReported(vuln.id, val),
+    onSuccess: (data) => {
+      const res = data as { cveReported: boolean; cveReportedAt: string | null };
+      patchVuln({
+        cveReported: res.cveReported,
+        cveReportedAt: res.cveReportedAt,
+      });
+      qc.invalidateQueries({ queryKey: ['vulns'] });
+    },
   });
 
   const exploitMutation = useMutation({
@@ -100,6 +166,7 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
           <SeverityBadge severity={vuln.severity} />
           <span className="font-mono text-xs text-muted-foreground">{vuln.cwe}</span>
           {vuln.isFalsePositive && <Badge variant="secondary">False Positive</Badge>}
+          {vuln.cveReported && <Badge variant="default">CVE Reported</Badge>}
           {vuln.cvssScore !== null && (
             <Badge variant="outline">CVSS {vuln.cvssScore}</Badge>
           )}
@@ -117,6 +184,24 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
           <p className="text-xs text-muted-foreground">Repo</p>
           <RepoUrlLink repoUrl={vuln.repoUrl} fullWidth className="text-sm" />
         </div>
+        {(vuln.githubStars != null || vuln.privateVulnerabilityReportingEnabled != null) && (
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <p className="text-muted-foreground">GitHub stars</p>
+              <p>{vuln.githubStars != null ? vuln.githubStars.toLocaleString() : '—'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">PVR</p>
+              <p>
+                {vuln.privateVulnerabilityReportingEnabled === true
+                  ? 'Enabled'
+                  : vuln.privateVulnerabilityReportingEnabled === false
+                    ? 'Disabled'
+                    : '—'}
+              </p>
+            </div>
+          </div>
+        )}
         {vuln.packageRepoUrl && (
           <div>
             <p className="text-xs text-muted-foreground">Repo URL</p>
@@ -274,6 +359,16 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
               <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${vuln.isFalsePositive ? 'translate-x-4' : ''}`} />
             </button>
           </div>
+          <Button
+            size="sm"
+            variant={vuln.cveReported ? 'outline' : 'default'}
+            className="w-full"
+            loading={cveReportedMutation.isPending}
+            onClick={() => cveReportedMutation.mutate(!vuln.cveReported)}
+          >
+            <CircleCheck className="w-3.5 h-3.5" />
+            {vuln.cveReported ? 'Unmark CVE reported' : 'Mark CVE reported'}
+          </Button>
           {needsDeleteConfirm ? (
             <ConfirmDialog
               title="Delete Vulnerability"
@@ -324,6 +419,8 @@ export default function Confirmed() {
   const [fpFilter, setFpFilter] = useState('');
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
+  const [pvrFilter, setPvrFilter] = useState('');
+  const [cveReportedFilter, setCveReportedFilter] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<ApiVulnerability | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -332,7 +429,7 @@ export default function Confirmed() {
   const selectedCount = selectedIds.length;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, search],
+    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, pvrFilter, cveReportedFilter, search],
     queryFn: () => api.getVulnerabilities({
       page,
       pageSize,
@@ -340,8 +437,10 @@ export default function Confirmed() {
       repoUrl: search,
       ...(exploitFilter ? { exploitStatus: exploitFilter } : {}),
       ...(fpFilter ? { falsePositive: fpFilter } : {}),
+      ...(cveReportedFilter ? { cveReported: cveReportedFilter } : {}),
       ...(cwe ? { cwe } : {}),
       ...(vulnType ? { vulnType } : {}),
+      ...(pvrFilter ? { pvr: pvrFilter } : {}),
     }),
     placeholderData: (prev) => prev,
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
@@ -385,6 +484,31 @@ export default function Confirmed() {
     { header: 'Vuln ID', cell: ({ row }) => (
       <span className="font-mono text-xs" title={row.original.id}>{formatVulnIdShort(row.original.id)}</span>
     ) },
+    {
+      id: 'stars',
+      header: 'Stars',
+      cell: ({ row }) => (
+        <span className="text-xs tabular-nums">
+          {row.original.githubStars != null && row.original.githubStars >= 0
+            ? row.original.githubStars.toLocaleString()
+            : '—'}
+        </span>
+      ),
+    },
+    {
+      id: 'pvr',
+      header: () => (
+        <Tooltip content="GitHub private vulnerability reporting (Report a vulnerability)">
+          <span>PVR</span>
+        </Tooltip>
+      ),
+      cell: ({ row }) => {
+        const pvr = row.original.privateVulnerabilityReportingEnabled;
+        if (pvr === true) return <Badge variant="default" className="text-xs">On</Badge>;
+        if (pvr === false) return <Badge variant="outline" className="text-xs">Off</Badge>;
+        return <span className="text-xs text-muted-foreground">—</span>;
+      },
+    },
     { header: 'Repo / Package', cell: ({ row }) => (
       <RepoUrlLink repoUrl={row.original.repoUrl} display="table" />
     ) },
@@ -415,6 +539,13 @@ export default function Confirmed() {
       ),
       cell: ({ row }) => <ExploitStatusIcon status={row.original.exploitStatus} />,
     },
+    {
+      id: 'cve-reported',
+      header: 'CVE',
+      cell: ({ row }) => (
+        <CveReportedCell vuln={row.original} onUpdated={() => qc.invalidateQueries({ queryKey: ['vulns'] })} />
+      ),
+    },
   ];
 
   return (
@@ -439,6 +570,17 @@ export default function Confirmed() {
             <option value="">All false positives</option>
             <option value="yes">False positive only</option>
             <option value="no">Exclude false positives</option>
+          </Select>
+          <Select value={pvrFilter} onChange={(e) => { setPvrFilter(e.target.value); setPage(1); }} title="Private vulnerability reporting">
+            <option value="">All PVR</option>
+            <option value="enabled">PVR enabled</option>
+            <option value="disabled">PVR disabled</option>
+            <option value="unknown">PVR unknown</option>
+          </Select>
+          <Select value={cveReportedFilter} onChange={(e) => { setCveReportedFilter(e.target.value); setPage(1); }}>
+            <option value="">All CVE status</option>
+            <option value="no">Not reported</option>
+            <option value="yes">CVE reported</option>
           </Select>
         </div>
 
@@ -488,6 +630,7 @@ export default function Confirmed() {
               rowSelection={rowSelection}
               onRowSelectionChange={setRowSelection}
               getRowId={(row) => row.id}
+              getRowClassName={(row) => row.cveReported ? 'opacity-60' : ''}
             />
             <Pagination
               page={page}
@@ -501,7 +644,13 @@ export default function Confirmed() {
           </>
         )}
       </div>
-      {selected && <VulnDetail vuln={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <VulnDetail
+          vuln={selected}
+          onClose={() => setSelected(null)}
+          onVulnChange={setSelected}
+        />
+      )}
     </Layout>
   );
 }

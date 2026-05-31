@@ -22,6 +22,7 @@ import { config, redisOptions } from './config.js';
 import { createWorkerLogger } from './logger.js';
 import { notifyOnCritical, notifyOnScanComplete } from './notify.js';
 import { requireScanJob, updateScanJob } from './db-helpers.js';
+import { applyGitHubScanGates } from './github-gates.js';
 
 const prisma = new PrismaClient();
 const log = createWorkerLogger('scanner');
@@ -127,6 +128,20 @@ export const scanWorker = new Worker<ScanJobData>(
           }
         }
       }
+    }
+
+    const gate = await applyGitHubScanGates(prisma, repoUrl, jobLog);
+    if (gate.skip) {
+      await updateScanJob(prisma, scanJobId, {
+        status: 'skipped',
+        error: gate.message,
+        finishedAt: new Date(),
+      });
+      await prisma.repo.update({
+        where: { url: repoUrl },
+        data: { status: 'skipped', lastScannedAt: new Date() },
+      });
+      return { skipped: true, reason: gate.reason };
     }
 
     const workspacePath = path.join(config.WORKSPACES_DIR, scanJobId);

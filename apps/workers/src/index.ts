@@ -8,8 +8,18 @@ setMaxListeners(100);
 import { scanWorker } from './scanner.worker.js';
 import { exploitWorker } from './exploit.worker.js';
 
+import { config } from './config.js';
+
 logger.info('Workers starting...');
 logger.info({ pid: process.pid }, 'Worker process');
+logger.info(
+  {
+    scanMinStars: config.SCAN_MIN_STARS,
+    scanRequirePvr: config.SCAN_REQUIRE_PVR,
+    githubTokenSet: Boolean(config.GITHUB_TOKEN?.trim()),
+  },
+  'Scan gates: min stars (0=off), require PVR',
+);
 
 scanWorker.on('ready', () => logger.info('Scan queue worker ready'));
 exploitWorker.on('ready', () => logger.info('Exploit queue worker ready'));

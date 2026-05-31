@@ -27,6 +27,9 @@ model Repo {
   packageVersion String?                     // resolved version after download
   provider       String    // github | bitbucket | gitlab | npm | pypi | other
   isPrivate      Boolean   @default(false)
+  githubStars              Int?
+  githubForks              Int?
+  privateVulnerabilityReportingEnabled Boolean?
   status         String    @default("queued")
   lastScannedAt  DateTime?
   createdAt      DateTime  @default(now())
@@ -73,6 +76,9 @@ model Vulnerability {
   message         String?
   metadataJson    Json?
   isFalsePositive Boolean   @default(false)
+  // Marked complete — reported/disclosed as CVE
+  cveReported     Boolean   @default(false)
+  cveReportedAt   DateTime?
   cvssScore       Float?
 
   // dropped=true when the CVE hunter intentionally excluded this finding
@@ -97,6 +103,7 @@ model Vulnerability {
   @@index([isFalsePositive])
   @@index([dropped])
   @@index([exploitStatus])
+  @@index([cveReported])
 }
 
 model WorkerConfig {

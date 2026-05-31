@@ -33,13 +33,29 @@ const vulnQuerySchema = z.object({
   /** Successful exploit generated (exploitStatus === done). */
   exploitable:    z.enum(['yes', 'no']).optional(),
   falsePositive:  z.enum(['yes', 'no']).optional(),
+  /** CVE reported / workflow complete */
+  cveReported:    z.enum(['yes', 'no']).optional(),
   dropped:        z.enum(['yes', 'no', 'all']).default('no'),
   exploitStatus:  z.string().optional(),
   dateFrom:       z.string().optional(),
   dateTo:         z.string().optional(),
-  sortBy:         z.enum(['severity', 'cwe', 'createdAt', 'cvssScore']).default('createdAt'),
+  sortBy:         z.enum(['severity', 'cwe', 'createdAt', 'cvssScore', 'stars']).default('createdAt'),
   sortDir:        z.enum(['asc', 'desc']).default('desc'),
+  /** GitHub PVR filter: enabled | disabled | unknown */
+  pvr:            z.enum(['enabled', 'disabled', 'unknown']).optional(),
 });
+
+function repoGhFields(repo: {
+  githubStars: number | null;
+  githubForks: number | null;
+  privateVulnerabilityReportingEnabled: boolean | null;
+}) {
+  return {
+    githubStars: repo.githubStars,
+    githubForks: repo.githubForks,
+    privateVulnerabilityReportingEnabled: repo.privateVulnerabilityReportingEnabled,
+  };
+}
 
 router.get('/', async (req, res) => {
   try {
@@ -56,6 +72,8 @@ router.get('/', async (req, res) => {
     if (q.vulnType)      where.vulnType = { contains: q.vulnType, mode: 'insensitive' };
     if (q.falsePositive === 'yes') where.isFalsePositive = true;
     if (q.falsePositive === 'no')  where.isFalsePositive = false;
+    if (q.cveReported === 'yes') where.cveReported = true;
+    if (q.cveReported === 'no')  where.cveReported = false;
     if (q.exploited === 'yes') where.exploitStatus = { not: null };
     if (q.exploited === 'no')  where.exploitStatus = null;
     if (q.exploitable === 'yes') where.exploitStatus = 'done';
@@ -74,22 +92,39 @@ router.get('/', async (req, res) => {
         ...(q.dateTo   ? { lte: new Date(q.dateTo) }   : {}),
       };
     }
-    const repoFilters: Record<string, unknown>[] = [];
-    if (q.repoUrl) repoFilters.push({ url: { contains: q.repoUrl, mode: 'insensitive' } });
-    if (q.org) repoFilters.push({ url: { contains: `/${q.org}/`, mode: 'insensitive' } });
-    if (repoFilters.length === 1) {
-      where.scanJob = { repo: repoFilters[0] };
-    } else if (repoFilters.length > 1) {
-      where.scanJob = { repo: { AND: repoFilters } };
+    const repoClauses: Record<string, unknown>[] = [];
+    if (q.repoUrl) repoClauses.push({ url: { contains: q.repoUrl, mode: 'insensitive' } });
+    if (q.org) repoClauses.push({ url: { contains: `/${q.org}/`, mode: 'insensitive' } });
+    if (q.pvr === 'enabled') repoClauses.push({ privateVulnerabilityReportingEnabled: true });
+    if (q.pvr === 'disabled') repoClauses.push({ privateVulnerabilityReportingEnabled: false });
+    if (q.pvr === 'unknown') repoClauses.push({ privateVulnerabilityReportingEnabled: null });
+    if (repoClauses.length === 1) {
+      where.scanJob = { repo: repoClauses[0] };
+    } else if (repoClauses.length > 1) {
+      where.scanJob = { repo: { AND: repoClauses } };
     }
+
+    const repoSelect = {
+      url: true,
+      repoUrl: true,
+      tarballUrl: true,
+      githubStars: true,
+      githubForks: true,
+      privateVulnerabilityReportingEnabled: true,
+    } as const;
+
+    const orderBy =
+      q.sortBy === 'stars'
+        ? { scanJob: { repo: { githubStars: q.sortDir } } }
+        : { [q.sortBy]: q.sortDir };
 
     const [vulns, total] = await Promise.all([
       prisma.vulnerability.findMany({
         where,
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
-        orderBy: { [q.sortBy]: q.sortDir },
-        include: { scanJob: { include: { repo: { select: { url: true, repoUrl: true, tarballUrl: true } } } } },
+        orderBy,
+        include: { scanJob: { include: { repo: { select: repoSelect } } } },
       }),
       prisma.vulnerability.count({ where }),
     ]);
@@ -110,6 +145,8 @@ router.get('/', async (req, res) => {
       message:        v.message,
       metadataJson:   v.metadataJson,
       isFalsePositive: v.isFalsePositive,
+      cveReported:    v.cveReported,
+      cveReportedAt:  v.cveReportedAt?.toISOString() ?? null,
       cvssScore:      v.cvssScore,
       dropped:        v.dropped,
       dropReason:     v.dropReason,
@@ -121,6 +158,7 @@ router.get('/', async (req, res) => {
       exploitError:   v.exploitError,
       exploitAttempts: v.exploitAttempts,
       createdAt:      v.createdAt.toISOString(),
+      ...repoGhFields(v.scanJob.repo),
     }));
 
     res.json({ data, total, page: q.page, pageSize: q.pageSize, totalPages: Math.ceil(total / q.pageSize) });
@@ -141,7 +179,16 @@ const droppedQuerySchema = z.object({
 });
 
 type VulnWithRepo = Awaited<ReturnType<typeof prisma.vulnerability.findMany<{
-  include: { scanJob: { include: { repo: { select: { url: true; repoUrl: true; tarballUrl: true } } } } }
+  include: { scanJob: { include: { repo: {
+    select: {
+      url: true;
+      repoUrl: true;
+      tarballUrl: true;
+      githubStars: true;
+      githubForks: true;
+      privateVulnerabilityReportingEnabled: true;
+    };
+  } } } }
 }>>>[number];
 
 function mapVulnRow(v: VulnWithRepo) {
@@ -151,6 +198,7 @@ function mapVulnRow(v: VulnWithRepo) {
     repoUrl:         v.scanJob.repo.url,
     packageRepoUrl:  v.scanJob.repo.repoUrl,
     packageTarballUrl: v.scanJob.repo.tarballUrl,
+    ...repoGhFields(v.scanJob.repo),
     checkId:         v.checkId,
     path:            v.path,
     lineStart:       v.lineStart,
@@ -161,6 +209,8 @@ function mapVulnRow(v: VulnWithRepo) {
     message:         v.message,
     metadataJson:    v.metadataJson,
     isFalsePositive: v.isFalsePositive,
+    cveReported:     v.cveReported,
+    cveReportedAt:   v.cveReportedAt?.toISOString() ?? null,
     cvssScore:       v.cvssScore,
     dropped:         v.dropped,
     dropReason:      v.dropReason,
@@ -192,7 +242,22 @@ router.get('/dropped', async (req, res) => {
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
         orderBy: { createdAt: 'desc' },
-        include: { scanJob: { include: { repo: { select: { url: true, repoUrl: true, tarballUrl: true } } } } },
+        include: {
+          scanJob: {
+            include: {
+              repo: {
+                select: {
+                  url: true,
+                  repoUrl: true,
+                  tarballUrl: true,
+                  githubStars: true,
+                  githubForks: true,
+                  privateVulnerabilityReportingEnabled: true,
+                },
+              },
+            },
+          },
+        },
       }),
       prisma.vulnerability.count({ where }),
     ]);
@@ -357,6 +422,26 @@ router.patch('/:id/false-positive', async (req, res) => {
       data: { isFalsePositive: value },
     });
     res.json({ id: updated.id, isFalsePositive: updated.isFalsePositive });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.patch('/:id/cve-reported', async (req, res) => {
+  try {
+    const { value } = z.object({ value: z.boolean() }).parse(req.body);
+    const updated = await prisma.vulnerability.update({
+      where: { id: req.params.id },
+      data: {
+        cveReported: value,
+        cveReportedAt: value ? new Date() : null,
+      },
+    });
+    res.json({
+      id: updated.id,
+      cveReported: updated.cveReported,
+      cveReportedAt: updated.cveReportedAt?.toISOString() ?? null,
+    });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

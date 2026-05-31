@@ -1,0 +1,158 @@
+import type { PrismaClient } from '@prisma/client';
+import {
+  fetchGitHubRepoSnapshot,
+  githubUrlFromRepo,
+  type GitHubRepoSnapshot,
+} from '@secscan/shared';
+import type { RegistryPackageType } from '@secscan/shared';
+import { config } from './config.js';
+import type { createWorkerLogger } from './logger.js';
+import { resolveRegistryPackage } from './pipeline.js';
+
+type JobLog = ReturnType<typeof createWorkerLogger>;
+
+export type GitHubGateSkip = {
+  skip: true;
+  reason: string;
+  message: string;
+};
+
+export type GitHubGateContinue = {
+  skip: false;
+  snapshot: GitHubRepoSnapshot | null;
+  githubUrl: string | null;
+};
+
+export type GitHubGateResult = GitHubGateSkip | GitHubGateContinue;
+
+const REGISTRY_TYPES = new Set<RegistryPackageType>(['npm', 'pip', 'cargo', 'go', 'gem']);
+
+/**
+ * Resolve a GitHub URL for scan gates: direct git/go keys, cached repoUrl, or registry metadata.
+ */
+async function resolveGitHubUrlForScan(
+  repo: {
+    url: string;
+    repoUrl: string | null;
+    packageType: string;
+    packageName: string | null;
+    packageVersion: string | null;
+  },
+  jobLog: JobLog,
+): Promise<string | null> {
+  const direct = githubUrlFromRepo(repo);
+  if (direct) return direct;
+
+  if (repo.packageType === 'git' || !repo.packageName || !REGISTRY_TYPES.has(repo.packageType as RegistryPackageType)) {
+    return null;
+  }
+
+  try {
+    jobLog.info(
+      { packageType: repo.packageType, packageName: repo.packageName },
+      'Resolving registry metadata for GitHub stars/PVR',
+    );
+    const meta = await resolveRegistryPackage(
+      repo.packageType as RegistryPackageType,
+      repo.packageName,
+      repo.packageVersion ?? undefined,
+    );
+    const ghUrl = meta.repoUrl ? githubUrlFromRepo({ url: '', repoUrl: meta.repoUrl }) : null;
+    if (ghUrl) {
+      jobLog.info({ githubUrl: ghUrl, resolvedVersion: meta.resolvedVersion }, 'Discovered GitHub repo from registry');
+    } else if (meta.repoUrl) {
+      jobLog.debug({ repository: meta.repoUrl }, 'Registry repository is not on GitHub — skipping stars/PVR');
+    } else {
+      jobLog.debug('No repository URL in registry metadata');
+    }
+    return ghUrl;
+  } catch (err: unknown) {
+    jobLog.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Registry resolve for GitHub metadata failed — proceeding without stars/PVR gates',
+    );
+    return null;
+  }
+}
+
+/**
+ * For GitHub repos (including registry packages whose upstream is on GitHub): fetch stars/forks/PVR,
+ * persist on Repo, and apply SCAN_MIN_STARS / SCAN_REQUIRE_PVR.
+ */
+export async function applyGitHubScanGates(
+  prisma: PrismaClient,
+  repoUrl: string,
+  jobLog: JobLog,
+): Promise<GitHubGateResult> {
+  const repo = await prisma.repo.findUnique({ where: { url: repoUrl } });
+  if (!repo) {
+    return { skip: false, snapshot: null, githubUrl: null };
+  }
+
+  const ghUrl = await resolveGitHubUrlForScan(repo, jobLog);
+  if (!ghUrl) {
+    return { skip: false, snapshot: null, githubUrl: null };
+  }
+
+  // Persist discovered GitHub URL early so UI/API show stars/PVR for packages too
+  if (repo.repoUrl !== ghUrl) {
+    await prisma.repo.update({
+      where: { url: repoUrl },
+      data: { repoUrl: ghUrl },
+    });
+  }
+
+  const token = config.GITHUB_TOKEN;
+  const snapshot = await fetchGitHubRepoSnapshot(ghUrl, token);
+
+  await prisma.repo.update({
+    where: { url: repoUrl },
+    data: {
+      githubStars: snapshot.githubStars,
+      githubForks: snapshot.githubForks,
+      privateVulnerabilityReportingEnabled: snapshot.privateVulnerabilityReportingEnabled,
+    },
+  });
+
+  const parts: string[] = [];
+  if (snapshot.githubStars != null) {
+    parts.push(`${snapshot.githubStars} stars, ${snapshot.githubForks ?? 0} forks`);
+  }
+  if (snapshot.privateVulnerabilityReportingEnabled != null) {
+    parts.push(
+      `private vulnerability reporting ${snapshot.privateVulnerabilityReportingEnabled ? 'on' : 'off'}`,
+    );
+  }
+  if (parts.length) {
+    jobLog.info({ ghUrl, ...snapshot }, `GitHub metadata: ${parts.join('; ')}`);
+  }
+
+  const minStars = config.SCAN_MIN_STARS;
+  const requirePvr = config.SCAN_REQUIRE_PVR;
+  const starCount = snapshot.githubStars;
+
+  if (minStars > 0 && typeof starCount === 'number' && starCount < minStars) {
+    const message = `Repository has ${starCount} stars (minimum ${minStars}) - skipping vulnerability scan`;
+    jobLog.info({ ghUrl, starCount, minStars }, message);
+    return { skip: true, reason: 'below-min-stars', message };
+  }
+
+  if (
+    requirePvr &&
+    snapshot.privateVulnerabilityReportingEnabled === false
+  ) {
+    const message =
+      'Private vulnerability reporting is not enabled for this repository - skipping vulnerability scan';
+    jobLog.info({ ghUrl }, message);
+    return { skip: true, reason: 'pvr-disabled', message };
+  }
+
+  if (requirePvr && snapshot.privateVulnerabilityReportingEnabled === null) {
+    jobLog.warn(
+      { ghUrl },
+      'SCAN_REQUIRE_PVR=true but PVR status unknown — proceeding with scan',
+    );
+  }
+
+  return { skip: false, snapshot, githubUrl: ghUrl };
+}
