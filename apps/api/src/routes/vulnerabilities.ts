@@ -116,7 +116,9 @@ router.get('/', async (req, res) => {
     const orderBy =
       q.sortBy === 'stars'
         ? { scanJob: { repo: { githubStars: q.sortDir } } }
-        : { [q.sortBy]: q.sortDir };
+        : q.sortBy === 'severity'
+          ? { cvssScore: q.sortDir }
+          : { [q.sortBy]: q.sortDir };
 
     const [vulns, total] = await Promise.all([
       prisma.vulnerability.findMany({

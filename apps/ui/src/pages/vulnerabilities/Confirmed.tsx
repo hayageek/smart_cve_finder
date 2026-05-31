@@ -410,6 +410,9 @@ function VulnDetail({
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
 
+type VulnSortBy = 'stars' | 'createdAt' | 'severity';
+type VulnSortDir = 'asc' | 'desc';
+
 export default function Confirmed() {
   const qc = useQueryClient();
   const [page, setPage] = useState(1);
@@ -421,6 +424,8 @@ export default function Confirmed() {
   const [vulnType, setVulnType] = useState('');
   const [pvrFilter, setPvrFilter] = useState('');
   const [cveReportedFilter, setCveReportedFilter] = useState('');
+  const [sortBy, setSortBy] = useState<VulnSortBy>('createdAt');
+  const [sortDir, setSortDir] = useState<VulnSortDir>('desc');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<ApiVulnerability | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -429,12 +434,14 @@ export default function Confirmed() {
   const selectedCount = selectedIds.length;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, pvrFilter, cveReportedFilter, search],
+    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, pvrFilter, cveReportedFilter, sortBy, sortDir, search],
     queryFn: () => api.getVulnerabilities({
       page,
       pageSize,
       severity,
       repoUrl: search,
+      sortBy,
+      sortDir,
       ...(exploitFilter ? { exploitStatus: exploitFilter } : {}),
       ...(fpFilter ? { falsePositive: fpFilter } : {}),
       ...(cveReportedFilter ? { cveReported: cveReportedFilter } : {}),
@@ -581,6 +588,15 @@ export default function Confirmed() {
             <option value="">All CVE status</option>
             <option value="no">Not reported</option>
             <option value="yes">CVE reported</option>
+          </Select>
+          <Select value={sortBy} onChange={(e) => { setSortBy(e.target.value as VulnSortBy); setPage(1); }}>
+            <option value="stars">Sort by stars</option>
+            <option value="createdAt">Sort by date</option>
+            <option value="severity">Sort by severity</option>
+          </Select>
+          <Select value={sortDir} onChange={(e) => { setSortDir(e.target.value as VulnSortDir); setPage(1); }}>
+            <option value="desc">Descending</option>
+            <option value="asc">Ascending</option>
           </Select>
         </div>
 
