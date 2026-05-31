@@ -13,7 +13,14 @@ import { mkdir, cp, rm, writeFile, copyFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { simpleGit } from 'simple-git';
-import type { VulnerabilityFinding, DroppedFinding, PackageType, RegistryPackageType } from '@secscan/shared';
+import {
+  CWE_CVSS_MAP,
+  type DroppedFinding,
+  type PackageType,
+  type RegistryPackageType,
+  type Severity,
+  type VulnerabilityFinding,
+} from '@secscan/shared';
 import { runSemgrepScan } from '@secscan/cve-semgrep';
 import { runCursorSkill } from './cursor-runner.js';
 import type { RunSkillOptions } from './cursor-runner.js';
@@ -545,6 +552,69 @@ export function extractJsonBlock<T>(text: string, tag: string): T | null {
   try { return JSON.parse(text.slice(si + start.length, ei).trim()) as T; } catch { return null; }
 }
 
+const SEVERITIES = new Set<Severity>(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']);
+
+function severityFromCvss(score: number): Severity {
+  if (score >= 9.0) return 'CRITICAL';
+  if (score >= 7.0) return 'HIGH';
+  if (score >= 4.0) return 'MEDIUM';
+  return 'LOW';
+}
+
+function parseSeverity(value: unknown): Severity | undefined {
+  if (typeof value !== 'string') return undefined;
+  const upper = value.toUpperCase() as Severity;
+  return SEVERITIES.has(upper) ? upper : undefined;
+}
+
+/** Flatten finding-shaped drop JSON (extra/start/end) into DroppedFinding. */
+export function normalizeDroppedFinding(raw: Record<string, unknown>): DroppedFinding {
+  const extra = raw.extra as Record<string, unknown> | undefined;
+  const meta = (raw.metadata ?? extra?.metadata) as Record<string, unknown> | undefined;
+  const start = raw.start as { line?: number } | undefined;
+  const end = raw.end as { line?: number } | undefined;
+  const cwe = String(raw.cwe ?? meta?.cwe ?? 'UNKNOWN');
+  const dropReason = String(raw.drop_reason ?? '');
+
+  let severity =
+    parseSeverity(raw.severity) ??
+    parseSeverity(extra?.severity);
+
+  if (!severity) {
+    const cvss = CWE_CVSS_MAP[cwe];
+    if (cvss != null) {
+      severity = severityFromCvss(cvss);
+    } else if (dropReason.includes('severity-below-high')) {
+      // Skill drops MEDIUM/LOW at Step 4 — default to MEDIUM, not LOW.
+      severity = 'MEDIUM';
+    } else {
+      severity = 'LOW';
+    }
+  }
+
+  const vulnType = raw.vulnerability_type ?? meta?.vulnerability_type;
+  const message = raw.message ?? extra?.message;
+
+  return {
+    check_id: String(raw.check_id ?? ''),
+    path: String(raw.path ?? ''),
+    line: Number(raw.line ?? start?.line ?? 0),
+    ...(raw.line_end != null || end?.line != null
+      ? { line_end: Number(raw.line_end ?? end?.line) }
+      : {}),
+    severity,
+    cwe,
+    ...(vulnType ? { vulnerability_type: String(vulnType) } : {}),
+    ...(message ? { message: String(message) } : {}),
+    ...(meta ? { metadata: meta } : {}),
+    ...(extra ? { extra: extra as DroppedFinding['extra'] } : {}),
+    ...(start ? { start: start as DroppedFinding['start'] } : {}),
+    ...(end ? { end: end as DroppedFinding['end'] } : {}),
+    drop_reason: dropReason,
+    drop_evidence: String(raw.drop_evidence ?? ''),
+  };
+}
+
 // ── Exploit output parsing & artifact collection ──────────────────
 
 /** Shape of the JSON block emitted by the exploit-generator skill. */
@@ -781,7 +851,8 @@ export async function runCveScan(
   });
 
   const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
-  const drops    = extractJsonBlock<DroppedFinding[]>(result.text, 'CVE_HUNTER_DROPS_JSON') ?? [];
+  const rawDrops = extractJsonBlock<Record<string, unknown>[]>(result.text, 'CVE_HUNTER_DROPS_JSON') ?? [];
+  const drops = rawDrops.map(normalizeDroppedFinding);
   log.info(`CVE scan complete: ${findings.length} findings, ${drops.length} drops`);
 
   return { findings, drops, rawOutput: result.text };

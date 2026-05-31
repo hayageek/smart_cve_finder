@@ -55,10 +55,12 @@ function vulnRowFromScan(fields: {
 }
 
 function metadataFromDropped(d: DroppedFinding): object {
-  if (d.metadata) return d.metadata as object;
+  const meta = d.extra?.metadata ?? d.metadata;
+  if (meta) return meta as object;
+  const vulnType = d.extra?.metadata?.vulnerability_type ?? d.vulnerability_type;
   return {
-    cwe: d.cwe ?? 'UNKNOWN',
-    ...(d.vulnerability_type ? { vulnerability_type: d.vulnerability_type } : {}),
+    cwe: d.extra?.metadata?.cwe ?? d.cwe ?? 'UNKNOWN',
+    ...(vulnType ? { vulnerability_type: vulnType } : {}),
   };
 }
 
@@ -310,7 +312,8 @@ export const scanWorker = new Worker<ScanJobData>(
 
       const droppedVulns = await Promise.all(
         drops.map((d) => {
-          const cwe = d.cwe ?? 'UNKNOWN';
+          const meta = d.extra?.metadata ?? d.metadata;
+          const cwe = String(meta?.cwe ?? d.cwe ?? 'UNKNOWN');
           return prisma.vulnerability.create({
             data: {
               id: uuidv7(),
@@ -318,12 +321,12 @@ export const scanWorker = new Worker<ScanJobData>(
               ...vulnRowFromScan({
                 checkId: d.check_id,
                 path: d.path,
-                lineStart: d.line ?? 0,
-                lineEnd: d.line_end ?? null,
-                severity: d.severity ?? 'LOW',
+                lineStart: d.start?.line ?? d.line ?? 0,
+                lineEnd: d.end?.line ?? d.line_end ?? null,
+                severity: d.extra?.severity ?? d.severity ?? 'LOW',
                 cwe,
-                vulnType: d.vulnerability_type ?? null,
-                message: d.message ?? null,
+                vulnType: String(meta?.vulnerability_type ?? d.vulnerability_type ?? '') || null,
+                message: String(d.extra?.message ?? d.message ?? '') || null,
                 metadataJson: metadataFromDropped(d),
               }),
               dropped: true,

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Copy, Check } from 'lucide-react';
-import { Modal, VULN_DETAIL_MODAL_SIZE_KEY } from './ui/Dialog.tsx';
+import { Copy, Check, Trash2 } from 'lucide-react';
+import { Modal, VULN_DETAIL_MODAL_SIZE_KEY, ConfirmDialog } from './ui/Dialog.tsx';
 import { Button } from './ui/Button.tsx';
 import { SeverityBadge, Badge } from './ui/Badge.tsx';
 import { RepoUrlLink } from './RepoUrlLink.tsx';
@@ -11,9 +11,11 @@ interface DroppedVulnDetailProps {
   onClose: () => void;
   onPromote?: () => void;
   promoteLoading?: boolean;
+  onDelete?: () => void | Promise<void>;
+  deleteLoading?: boolean;
 }
 
-export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading }: DroppedVulnDetailProps) {
+export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading, onDelete, deleteLoading }: DroppedVulnDetailProps) {
   const [copied, setCopied] = useState(false);
   const meta = (vuln.metadataJson ?? {}) as {
     dataflow_steps?: string[];
@@ -85,7 +87,7 @@ export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading }: 
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Repo</p>
-          <RepoUrlLink repoUrl={vuln.repoUrl} className="max-w-none text-sm break-all" />
+          <RepoUrlLink repoUrl={vuln.repoUrl} fullWidth className="text-sm" />
         </div>
         {vuln.packageRepoUrl && (
           <div>
@@ -163,11 +165,33 @@ export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading }: 
           </div>
         )}
 
-        {onPromote && (
-          <div className="border-t border-border pt-3">
-            <Button size="sm" className="w-full" loading={promoteLoading} onClick={onPromote}>
-              Promote to Confirmed
-            </Button>
+        {(onPromote || onDelete) && (
+          <div className="border-t border-border pt-3 flex flex-col gap-2">
+            {onPromote && (
+              <Button size="sm" className="w-full" loading={promoteLoading} onClick={onPromote}>
+                Promote to Confirmed
+              </Button>
+            )}
+            {onDelete && (
+              <ConfirmDialog
+                title="Delete Dropped Finding"
+                description="Permanently remove this dropped finding?"
+                confirmText="Delete"
+                onConfirm={async () => { await onDelete?.(); }}
+              >
+                {(open) => (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="w-full"
+                    loading={deleteLoading}
+                    onClick={open}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete
+                  </Button>
+                )}
+              </ConfirmDialog>
+            )}
           </div>
         )}
       </div>

@@ -9,16 +9,95 @@ import {
   entryToScanJobPayload,
   parseCsvRow,
   registryProvider,
+  scanTargetToEntry,
   type ParsedEntry,
 } from '../lib/repo-import.js';
+import { enqueueScans } from '../services/scans.js';
 import { emitActivityEvent } from '../sockets/index.js';
+import { REGISTRY_PACKAGE_TYPES } from '@secscan/shared';
 import { type PackageType } from '@secscan/shared';
 import { z } from 'zod';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+const scanTargetSchema = z.union([
+  z.object({ gitUrl: z.string().min(1), isPrivate: z.boolean().optional() }),
+  z.object({
+    packageName: z.string().min(1),
+    packageType: z.enum(REGISTRY_PACKAGE_TYPES),
+    packageVersion: z.string().optional(),
+  }),
+]);
+
+function buildPreviewRow(
+  entry: ParsedEntry,
+  existing?: { status: string } | null,
+) {
+  return {
+    url: entry.url,
+    packageType: entry.packageType,
+    packageName: entry.packageType !== 'git' ? entry.packageName : undefined,
+    packageVersion: entry.packageType !== 'git' ? entry.packageVersion : undefined,
+    provider: entry.packageType === 'git'
+      ? detectGitProvider(entry.url)
+      : registryProvider(entry.packageType),
+    isPrivate: entry.packageType === 'git' ? entry.isPrivate : false,
+    exists: !!existing,
+    inQueue: existing ? isRepoInScanPipeline(existing.status) : false,
+  };
+}
+
+async function previewEntries(parsed: ParsedEntry[]) {
+  const urls = parsed.map((p) => p.url);
+  const existing = await prisma.repo.findMany({
+    where: { url: { in: urls } },
+    select: { url: true, status: true },
+  });
+  const existingByUrl = new Map(existing.map((r) => [r.url, r.status]));
+  const preview = parsed.map((entry) => {
+    const status = existingByUrl.get(entry.url);
+    return buildPreviewRow(entry, status !== undefined ? { status } : null);
+  });
+  return { preview, total: parsed.length, duplicates: existing.length };
+}
+
 // ── Routes ────────────────────────────────────────────────────────
+
+router.post('/import/manual/preview', async (req, res) => {
+  try {
+    const target = scanTargetSchema.parse(req.body);
+    const entry = scanTargetToEntry(target);
+    if (!entry) {
+      return res.status(400).json({
+        error: 'Invalid entry — use a git URL (http/https) or a package name with type npm|pip|cargo|go|gem',
+      });
+    }
+    const existing = await prisma.repo.findUnique({
+      where: { url: entry.url },
+      select: { status: true },
+    });
+    res.json({ preview: buildPreviewRow(entry, existing) });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: err.errors.map((e) => e.message).join('; ') });
+    }
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post('/import/manual', async (req, res) => {
+  try {
+    const body = z.object({ targets: z.array(scanTargetSchema).min(1) }).parse(req.body);
+    const result = await enqueueScans(body.targets);
+    res.json({ queued: result.queued, skipped: result.skipped });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: err.errors.map((e) => e.message).join('; ') });
+    }
+    res.status(500).json({ error: String(err) });
+  }
+});
 
 router.post('/import/preview', upload.single('file'), async (req, res) => {
   try {
@@ -26,31 +105,7 @@ router.post('/import/preview', upload.single('file'), async (req, res) => {
     const text = req.file.buffer.toString('utf-8');
     const rows: string[][] = parse(text, { skip_empty_lines: true, trim: true, relax_column_count: true });
     const parsed = rows.map(parseCsvRow).filter(Boolean) as ParsedEntry[];
-    const urls = parsed.map((p) => p.url);
-    const existing = await prisma.repo.findMany({
-      where: { url: { in: urls } },
-      select: { url: true, status: true },
-    });
-    const existingByUrl = new Map(existing.map((r) => [r.url, r.status]));
-
-    const preview = parsed.map((entry) => {
-      const status = existingByUrl.get(entry.url);
-      const exists = status !== undefined;
-      return {
-        url: entry.url,
-        packageType: entry.packageType,
-        packageName: entry.packageType !== 'git' ? entry.packageName : undefined,
-        packageVersion: entry.packageType !== 'git' ? entry.packageVersion : undefined,
-        provider: entry.packageType === 'git'
-          ? detectGitProvider(entry.url)
-          : registryProvider(entry.packageType),
-        isPrivate: entry.packageType === 'git' ? entry.isPrivate : false,
-        exists,
-        inQueue: exists && isRepoInScanPipeline(status),
-      };
-    });
-
-    res.json({ preview, total: parsed.length, duplicates: existing.length });
+    res.json(await previewEntries(parsed));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

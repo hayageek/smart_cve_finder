@@ -209,9 +209,18 @@ router.get('/dropped', async (req, res) => {
   }
 });
 
-router.delete('/dropped', async (_req, res) => {
+router.delete('/dropped', async (req, res) => {
   try {
-    const { count } = await prisma.vulnerability.deleteMany({ where: { dropped: true } });
+    const body = z.object({ ids: z.array(z.string()).optional() }).parse(req.body ?? {});
+    const where: { dropped: true; id?: { in: string[] } } = { dropped: true };
+    if (body.ids?.length) where.id = { in: body.ids };
+
+    const vulns = await prisma.vulnerability.findMany({
+      where,
+      select: { id: true, reportPath: true, exploitPath: true, payloadPath: true },
+    });
+    for (const vuln of vulns) deleteFindingArtifacts(vuln);
+    const { count } = await prisma.vulnerability.deleteMany({ where });
     res.json({ ok: true, deleted: count });
   } catch (err) {
     res.status(500).json({ error: String(err) });

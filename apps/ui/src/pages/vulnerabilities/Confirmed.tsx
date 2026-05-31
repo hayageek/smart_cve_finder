@@ -13,7 +13,7 @@ import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { ReportViewerModal } from '../../components/ReportViewerModal.tsx';
 import { Tooltip } from '../../components/ui/Tooltip.tsx';
-import { formatDate, formatFileLine } from '../../lib/utils.ts';
+import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.ts';
 import type { ApiVulnerability } from '@secscan/shared';
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -115,7 +115,7 @@ function VulnDetail({ vuln, onClose }: { vuln: ApiVulnerability; onClose: () => 
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Repo</p>
-          <RepoUrlLink repoUrl={vuln.repoUrl} className="max-w-none text-sm break-all" />
+          <RepoUrlLink repoUrl={vuln.repoUrl} fullWidth className="text-sm" />
         </div>
         {vuln.packageRepoUrl && (
           <div>
@@ -383,7 +383,10 @@ export default function Confirmed() {
       ),
     },
     { header: 'Vuln ID', cell: ({ row }) => (
-      <span className="font-mono text-xs" title={row.original.id}>{row.original.id}</span>
+      <span className="font-mono text-xs" title={row.original.id}>{formatVulnIdShort(row.original.id)}</span>
+    ) },
+    { header: 'Repo / Package', cell: ({ row }) => (
+      <RepoUrlLink repoUrl={row.original.repoUrl} display="table" />
     ) },
     { header: 'Severity', cell: ({ row }) => <SeverityBadge severity={row.original.severity} /> },
     { header: 'CWE', cell: ({ row }) => <span className="font-mono text-xs">{row.original.cwe}</span> },
@@ -396,7 +399,6 @@ export default function Confirmed() {
         {formatFileLine(row.original.path, row.original.lineStart, row.original.lineEnd)}
       </span>
     ) },
-    { header: 'Repo', cell: ({ row }) => <RepoUrlLink repoUrl={row.original.repoUrl} /> },
     { header: 'Found', cell: ({ row }) => <span className="text-xs text-muted-foreground">{formatDate(row.original.createdAt)}</span> },
     {
       header: 'FP',

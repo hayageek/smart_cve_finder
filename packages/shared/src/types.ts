@@ -71,13 +71,25 @@ export interface VulnerabilityFinding {
 export interface DroppedFinding {
   check_id: string;
   path: string;
-  line: number;
+  /** Flat form (legacy / normalized). */
+  line?: number;
   line_end?: number;
   severity?: Severity;
-  cwe: string;
+  cwe?: string;
   vulnerability_type?: string;
   message?: string;
   metadata?: Record<string, unknown>;
+  /** Finding-shaped form (skill output) — same layout as VulnerabilityFinding. */
+  start?: { line: number; col?: number };
+  end?: { line: number; col?: number };
+  extra?: {
+    message?: string;
+    severity?: Severity;
+    metadata?: Record<string, unknown> & {
+      cwe?: string;
+      vulnerability_type?: string;
+    };
+  };
   drop_reason: string;
   drop_evidence: string;
 }

@@ -46,6 +46,16 @@ export const api = {
     form.append('file', file);
     return fetch(`${BASE}/api/repos/import/preview`, { method: 'POST', body: form }).then((r) => r.json());
   },
+  previewImportManual: (target: Record<string, unknown>) =>
+    request<{ preview: unknown }>('/api/repos/import/manual/preview', {
+      method: 'POST',
+      body: JSON.stringify(target),
+    }),
+  importManual: (targets: Record<string, unknown>[]) =>
+    request<{ queued: number; skipped: number }>('/api/repos/import/manual', {
+      method: 'POST',
+      body: JSON.stringify({ targets }),
+    }),
   importRepos: (file: File) => {
     const form = new FormData();
     form.append('file', file);
@@ -88,7 +98,16 @@ export const api = {
     request<unknown>(`/api/vulnerabilities/dropped?${new URLSearchParams(params as Record<string, string>)}`),
   promoteDropped: (id: string) =>
     request<unknown>(`/api/vulnerabilities/dropped/${id}/promote`, { method: 'POST' }),
-  clearDroppedVulns: () => request<unknown>('/api/vulnerabilities/dropped', { method: 'DELETE' }),
+  deleteDroppedVulns: (ids?: string[]) =>
+    request<{ ok: boolean; deleted: number }>('/api/vulnerabilities/dropped', {
+      method: 'DELETE',
+      body: JSON.stringify(ids?.length ? { ids } : {}),
+    }),
+  clearDroppedVulns: () =>
+    request<{ ok: boolean; deleted: number }>('/api/vulnerabilities/dropped', {
+      method: 'DELETE',
+      body: JSON.stringify({}),
+    }),
 
   // Exploits
   getExploits: (params: Record<string, unknown>) =>

@@ -33,6 +33,11 @@ export function truncate(s: string, max = 60): string {
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
+/** Last N characters of a vuln/finding UUID for compact table cells. */
+export function formatVulnIdShort(id: string, tail = 5): string {
+  return id.length <= tail ? id : id.slice(-tail);
+}
+
 export function formatFileLine(
   path: string,
   lineStart: number,
