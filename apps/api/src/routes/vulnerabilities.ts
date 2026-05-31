@@ -117,7 +117,7 @@ router.get('/', async (req, res) => {
       q.sortBy === 'stars'
         ? { scanJob: { repo: { githubStars: q.sortDir } } }
         : q.sortBy === 'severity'
-          ? { cvssScore: q.sortDir }
+          ? { severityRank: q.sortDir }
           : { [q.sortBy]: q.sortDir };
 
     const [vulns, total] = await Promise.all([

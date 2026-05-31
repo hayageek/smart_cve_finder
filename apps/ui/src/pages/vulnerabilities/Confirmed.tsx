@@ -558,45 +558,46 @@ export default function Confirmed() {
   return (
     <Layout title="Confirmed Vulnerabilities" subtitle={`${data?.total ?? 0} findings`}>
       <div className="space-y-4">
-        <div className="flex gap-2 flex-wrap">
-          <Input placeholder="Filter by repo..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="max-w-xs" />
-          <Input placeholder="Filter by CWE..." value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="max-w-[140px]" />
-          <Input placeholder="Filter by type..." value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="max-w-[160px]" />
-          <Select value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }}>
-            <option value="">All severities</option>
+        <div className="flex flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5">
+          <Input placeholder="Repo…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="h-8 text-xs max-w-[9rem] shrink-0" />
+          <Input placeholder="CWE…" value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="h-8 text-xs max-w-[5.5rem] shrink-0" />
+          <Input placeholder="Type…" value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="h-8 text-xs max-w-[5.5rem] shrink-0" />
+          <Select density="compact" value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }} title="Severity">
+            <option value="">Severity</option>
             {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => <option key={s} value={s}>{s}</option>)}
           </Select>
-          <Select value={exploitFilter} onChange={(e) => { setExploitFilter(e.target.value); setPage(1); }}>
-            <option value="">All exploit states</option>
-            <option value="done">Exploitable</option>
-            <option value="in_progress">In progress</option>
+          <Select density="compact" value={exploitFilter} onChange={(e) => { setExploitFilter(e.target.value); setPage(1); }} title="Exploit status">
+            <option value="">Exploit</option>
+            <option value="done">Done</option>
+            <option value="in_progress">Active</option>
             <option value="failed">Failed</option>
-            <option value="none">Not tried</option>
+            <option value="none">Pending</option>
           </Select>
-          <Select value={fpFilter} onChange={(e) => { setFpFilter(e.target.value); setPage(1); }}>
-            <option value="">All false positives</option>
-            <option value="yes">False positive only</option>
-            <option value="no">Exclude false positives</option>
+          <Select density="compact" value={fpFilter} onChange={(e) => { setFpFilter(e.target.value); setPage(1); }} title="False positive">
+            <option value="">FP</option>
+            <option value="yes">FP only</option>
+            <option value="no">No FP</option>
           </Select>
-          <Select value={pvrFilter} onChange={(e) => { setPvrFilter(e.target.value); setPage(1); }} title="Private vulnerability reporting">
-            <option value="">All PVR</option>
-            <option value="enabled">PVR enabled</option>
-            <option value="disabled">PVR disabled</option>
-            <option value="unknown">PVR unknown</option>
+          <Select density="compact" value={pvrFilter} onChange={(e) => { setPvrFilter(e.target.value); setPage(1); }} title="Private vulnerability reporting" className="max-w-[4.5rem]">
+            <option value="">PVR</option>
+            <option value="enabled">On</option>
+            <option value="disabled">Off</option>
+            <option value="unknown">?</option>
           </Select>
-          <Select value={cveReportedFilter} onChange={(e) => { setCveReportedFilter(e.target.value); setPage(1); }}>
-            <option value="">All CVE status</option>
-            <option value="no">Not reported</option>
-            <option value="yes">CVE reported</option>
+          <Select density="compact" value={cveReportedFilter} onChange={(e) => { setCveReportedFilter(e.target.value); setPage(1); }} title="CVE reported" className="max-w-[5.5rem]">
+            <option value="">CVE</option>
+            <option value="no">Open</option>
+            <option value="yes">Done</option>
           </Select>
-          <Select value={sortBy} onChange={(e) => { setSortBy(e.target.value as VulnSortBy); setPage(1); }}>
-            <option value="stars">Sort by stars</option>
-            <option value="createdAt">Sort by date</option>
-            <option value="severity">Sort by severity</option>
+          <span className="text-muted-foreground text-xs shrink-0 select-none" aria-hidden>|</span>
+          <Select density="compact" value={sortBy} onChange={(e) => { setSortBy(e.target.value as VulnSortBy); setPage(1); }} title="Sort by" className="max-w-[5.5rem]">
+            <option value="stars">Stars</option>
+            <option value="createdAt">Date</option>
+            <option value="severity">Severity</option>
           </Select>
-          <Select value={sortDir} onChange={(e) => { setSortDir(e.target.value as VulnSortDir); setPage(1); }}>
-            <option value="desc">Descending</option>
-            <option value="asc">Ascending</option>
+          <Select density="compact" value={sortDir} onChange={(e) => { setSortDir(e.target.value as VulnSortDir); setPage(1); }} title="Sort order" className="max-w-[4.25rem]">
+            <option value="desc">Desc</option>
+            <option value="asc">Asc</option>
           </Select>
         </div>
 

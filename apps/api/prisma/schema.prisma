@@ -71,6 +71,7 @@ model Vulnerability {
   lineStart       Int
   lineEnd         Int?
   severity        String
+  severityRank    Int       @default(0)
   cwe             String
   vulnType        String?
   message         String?
@@ -99,6 +100,7 @@ model Vulnerability {
 
   @@index([scanJobId])
   @@index([severity])
+  @@index([severityRank])
   @@index([cwe])
   @@index([isFalsePositive])
   @@index([dropped])

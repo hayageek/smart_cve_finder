@@ -47,6 +47,7 @@ function vulnRowFromScan(fields: {
     lineStart: fields.lineStart,
     lineEnd: fields.lineEnd,
     severity: fields.severity,
+    severityRank: SEVERITY_ORDER[fields.severity] ?? 0,
     cwe: fields.cwe,
     vulnType: fields.vulnType,
     message: fields.message,
