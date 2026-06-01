@@ -1,0 +1,19 @@
+{
+  "name": "@secscan/top-packages",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "top-packages": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "cli": "tsx src/cli.ts",
+    "dev": "tsx src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.15.6",
+    "typescript": "^5.4.0"
+  }
+}
