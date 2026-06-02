@@ -8,6 +8,7 @@
     "build": "npm run db:generate && tsc",
     "start": "node dist/index.js",
     "cli": "tsx src/cli.ts",
+    "cursor-test": "tsx src/cursor-agent-test-cli.ts",
     "github-pvr": "tsx src/github-pvr-cli.ts",
     "npm-packages": "tsx src/npm-packages-cli.ts"
   },

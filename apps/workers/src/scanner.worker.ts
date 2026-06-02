@@ -231,6 +231,7 @@ export const scanWorker = new Worker<ScanJobData>(
           cwd:           workspacePath,
           cwdIsAbsolute: path.isAbsolute(workspacePath),
           model:         config.CURSOR_AGENT_MODEL,
+          modelFast:     config.CURSOR_AGENT_MODEL_FAST,
           processCwd:    process.cwd(),
         },
         'scanner.worker: starting CVE scan via @cursor/sdk',
@@ -244,6 +245,7 @@ export const scanWorker = new Worker<ScanJobData>(
           {
             cwd:              workspacePath,
             model:            config.CURSOR_AGENT_MODEL,
+            modelFast:        config.CURSOR_AGENT_MODEL_FAST,
             apiKey:           config.CURSOR_API_KEY,
             debug:            config.DEBUG_CURSOR,
             semgrepEnabled:   config.CVE_SEMGREP_ENABLED,

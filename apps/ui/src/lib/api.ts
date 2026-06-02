@@ -95,6 +95,11 @@ export const api = {
     request<{ queued: number }>('/api/vulnerabilities/bulk-exploit', { method: 'POST', body: JSON.stringify(body) }),
   deleteVulnerability: (id: string) =>
     request<{ ok: boolean; id: string }>(`/api/vulnerabilities/${id}`, { method: 'DELETE' }),
+  deleteVulnerabilitiesBulk: (ids: string[]) =>
+    request<{ ok: boolean; deleted: number }>('/api/vulnerabilities/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
+    }),
   clearVulnerabilities: () => request<unknown>('/api/vulnerabilities', { method: 'DELETE' }),
   getDroppedVulns: (params: Record<string, unknown>) =>
     request<unknown>(`/api/vulnerabilities/dropped?${new URLSearchParams(params as Record<string, string>)}`),

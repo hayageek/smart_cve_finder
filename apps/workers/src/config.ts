@@ -27,8 +27,10 @@ const schema = z.object({
   SKILLS_REPO_URL: z.string().default('https://github.com/hayageek/security_skills'),
   // Timeout (ms) for a single @cursor/sdk Agent.prompt() call
   CURSOR_AGENT_TIMEOUT_MS: z.coerce.number().default(300000),
-  // Model passed to @cursor/sdk Agent.prompt(); use "composer-latest" or a specific model ID.
+  // Model passed to @cursor/sdk Agent.create(); use "composer-latest" or a specific model ID.
   CURSOR_AGENT_MODEL: z.string().default('claude-sonnet-4-5'),
+  // Composer 2.5 tier: false = standard (cheaper), true = fast (SDK default when omitted).
+  CURSOR_AGENT_MODEL_FAST: z.string().transform((v) => v === 'true').default('false'),
   CURSOR_API_KEY: z.string().optional(),
   // Set to "true" to log the full prompt and result text from @cursor/sdk calls
   DEBUG_CURSOR: z.string().transform((v) => v === 'true').default('false'),

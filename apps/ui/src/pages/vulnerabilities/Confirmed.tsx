@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
 import { Copy, Check, Download, Zap, FileText, Eye, X, Trash2, CircleCheck } from 'lucide-react';
@@ -460,6 +460,24 @@ export default function Confirmed() {
     },
   });
 
+  const deleteSelectedMutation = useMutation({
+    mutationFn: (ids: string[]) => api.deleteVulnerabilitiesBulk(ids),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vulns'] });
+      setRowSelection({});
+      setSelected(null);
+    },
+  });
+
+  const selectedHasArtifacts = useMemo(() => {
+    const rows = data?.data ?? [];
+    return selectedIds.some((id) => {
+      const v = rows.find((r) => r.id === id);
+      if (!v) return false;
+      return v.exploitStatus !== null || !!(v.reportPath || v.exploitPath || v.payloadPath);
+    });
+  }, [data?.data, selectedIds]);
+
   const handleRowClick = useCallback((row: ApiVulnerability) => {
     setSelected(row);
   }, []);
@@ -625,6 +643,28 @@ export default function Confirmed() {
                 <Zap className="w-3.5 h-3.5" />
                 Queue for Exploit
               </Button>
+              <ConfirmDialog
+                title="Delete Selected Vulnerabilities"
+                description={
+                  selectedHasArtifacts
+                    ? `Permanently delete ${selectedCount} ${selectedCount === 1 ? 'vulnerability' : 'vulnerabilities'}? Some have exploit artifacts or reports that will also be removed.`
+                    : `Permanently delete ${selectedCount} ${selectedCount === 1 ? 'vulnerability' : 'vulnerabilities'}?`
+                }
+                confirmText="Delete"
+                onConfirm={async () => { await deleteSelectedMutation.mutateAsync(selectedIds); }}
+              >
+                {(open) => (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    loading={deleteSelectedMutation.isPending}
+                    onClick={open}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete Selected
+                  </Button>
+                )}
+              </ConfirmDialog>
               <button
                 onClick={() => setRowSelection({})}
                 className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"

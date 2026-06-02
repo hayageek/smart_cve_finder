@@ -16,6 +16,7 @@ import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.t
 import type { ApiVulnerability } from '@secscan/shared';
 
 const DROP_REASONS = ['severity-below-high', 'excluded-path', 'false-positive-heuristic', 'low-confidence'];
+const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -24,6 +25,7 @@ export default function Dropped() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [dropReason, setDropReason] = useState('');
+  const [severity, setSeverity] = useState('');
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
@@ -41,12 +43,13 @@ export default function Dropped() {
   }, []);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dropped-vulns', page, pageSize, dropReason, cwe, vulnType, search],
+    queryKey: ['dropped-vulns', page, pageSize, dropReason, severity, cwe, vulnType, search],
     queryFn: () => api.getDroppedVulns({
       page,
       pageSize,
       dropReason,
       repoUrl: search,
+      ...(severity ? { severity } : {}),
       ...(cwe ? { cwe } : {}),
       ...(vulnType ? { vulnType } : {}),
     }),
@@ -130,12 +133,7 @@ export default function Dropped() {
       </span>
     ) },
     { header: 'Drop Reason', cell: ({ row }) => <Badge variant="secondary">{row.original.dropReason}</Badge> },
-    { header: 'Evidence', cell: ({ row }) => <span className="text-xs text-muted-foreground max-w-48 truncate block">{row.original.dropEvidence}</span> },
     { header: 'Found', cell: ({ row }) => <span className="text-xs text-muted-foreground">{formatDate(row.original.createdAt)}</span> },
-    {
-      header: 'Status',
-      cell: () => <Badge variant="outline">Dropped</Badge>,
-    },
     {
       header: 'Actions',
       cell: ({ row }) => (
@@ -190,6 +188,10 @@ export default function Dropped() {
           <Input placeholder="Filter by repo..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="max-w-xs" />
           <Input placeholder="Filter by CWE..." value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="max-w-[140px]" />
           <Input placeholder="Filter by type..." value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="max-w-[160px]" />
+          <Select value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }}>
+            <option value="">All severities</option>
+            {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </Select>
           <Select value={dropReason} onChange={(e) => { setDropReason(e.target.value); setPage(1); }}>
             <option value="">All reasons</option>
             {DROP_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}

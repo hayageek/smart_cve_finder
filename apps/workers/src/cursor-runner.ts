@@ -23,7 +23,7 @@
 import { setMaxListeners } from 'events';
 import path from 'path';
 import { existsSync } from 'fs';
-import { Agent, CursorAgentError } from '@cursor/sdk';
+import { Agent, CursorAgentError, type ModelSelection } from '@cursor/sdk';
 
 // @cursor/sdk attaches AbortSignal listeners for every concurrent run.
 // With multiple parallel workers the default limit of 10 is exceeded quickly.
@@ -42,8 +42,13 @@ export interface RunSkillOptions {
   promptSuffix?: string;
   /** Absolute path to the workspace directory (must contain .cursor/skills/). */
   cwd: string;
-  /** Cursor model ID, e.g. "claude-sonnet-4-5" or "composer-latest". */
+  /** Cursor model ID, e.g. "claude-sonnet-4-5" or "composer-2.5". */
   model: string;
+  /**
+   * Composer 2.5 fast tier. false = standard (cheaper billing).
+   * Defaults to CURSOR_AGENT_MODEL_FAST env (false when unset).
+   */
+  modelFast?: boolean;
   /**
    * Cursor API key. Falls back to CURSOR_API_KEY env var when omitted.
    * Get yours at https://cursor.com/settings
@@ -96,10 +101,33 @@ function createDbg(onDebug?: (message: string) => void) {
   };
 }
 
+// ── Model selection ─────────────────────────────────────────────────
+
+/** True when env/options request Composer fast tier (standard = false). */
+export function resolveModelFast(explicit?: boolean): boolean {
+  return explicit ?? process.env.CURSOR_AGENT_MODEL_FAST === 'true';
+}
+
+/**
+ * Build SDK model selection. Composer models get an explicit `fast` param so
+ * we do not rely on the API default variant (fast=true → cursor-2.5-fast billing).
+ */
+export function buildModelSelection(modelId: string, modelFast?: boolean): ModelSelection {
+  if (!modelId.toLowerCase().includes('composer')) {
+    return { id: modelId };
+  }
+  const fast = resolveModelFast(modelFast);
+  return {
+    id: modelId,
+    params: [{ id: 'fast', value: fast ? 'true' : 'false' }],
+  };
+}
+
 // ── Implementation ────────────────────────────────────────────────
 
 export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkillResult> {
   const { skillPath, promptSuffix, cwd, model, onChunk } = options;
+  const modelSelection = buildModelSelection(model, options.modelFast);
   const debug = options.debug ?? process.env.DEBUG_CURSOR === 'true';
   const DBG = createDbg(options.onDebug);
 
@@ -120,6 +148,7 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
     DBG.line('REQUEST');
     DBG.kv('skill',  skillPath);
     DBG.kv('model',  model);
+    DBG.kv('model-params', JSON.stringify(modelSelection.params ?? []));
     DBG.kv('cwd',    cwd);
     DBG.kv('api-key', `${apiKey.slice(0, 8)}…${apiKey.slice(-4)}`);
     if (promptSuffix) DBG.block('PROMPT SUFFIX', promptSuffix);
@@ -152,14 +181,16 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
 
   // Use Agent.create() + agent.send() so we can optionally stream.
   // Agent.prompt() is simpler but doesn't expose run.stream().
-  const agent = await Agent.create({ apiKey, model: { id: model }, local: { cwd } });
+  const agent = await Agent.create({ apiKey, model: modelSelection, local: { cwd } });
 
   let outputText = '';
 
   try {
     // Log the exact prompt sent to the agent → pino file + stdout + Redis live stream.
     if (options.onDebug) {
-      options.onDebug(`model=${model} cwd=${cwd}`);
+      options.onDebug(
+        `model=${model} fast=${modelSelection.params?.find((p) => p.id === 'fast')?.value ?? 'n/a'} cwd=${cwd}`,
+      );
       options.onDebug(`agent.send prompt (${prompt.length} chars):\n${prompt}`);
     }
 

@@ -21,6 +21,7 @@
  *
  * Shared options:
  *   --model   <model>         Cursor model ID (default: CURSOR_AGENT_MODEL env)
+ *   --fast    <true|false>    Composer 2.5 tier (default: CURSOR_AGENT_MODEL_FAST env)
  *   --api-key <key>           Cursor API key  (default: CURSOR_API_KEY env)
  *   --debug                   Print full SDK output text
  *
@@ -98,8 +99,16 @@ function hasFlag(name: string): boolean {
 const command = argv[0];
 
 // Find the first positional argument after the command (skip flags and their values).
-const VALUE_FLAGS = new Set(['--type','--source','--version','--model','--api-key',
+const VALUE_FLAGS = new Set(['--type','--source','--version','--model','--fast','--api-key',
   '--workspace','--skills-url','--skills-dir','--reports-dir','--min-severity']);
+
+function parseFastFlag(raw: string | undefined): boolean {
+  if (raw === undefined) return process.env.CURSOR_AGENT_MODEL_FAST === 'true';
+  const v = raw.toLowerCase();
+  if (v === 'true' || v === '1' || v === 'yes') return true;
+  if (v === 'false' || v === '0' || v === 'no') return false;
+  throw new Error(`Invalid --fast value "${raw}" (use true or false)`);
+}
 function firstPositional(): string | undefined {
   let skip = false;
   for (let i = 1; i < argv.length; i++) {
@@ -129,6 +138,7 @@ const opts = {
   source:       getFlag('--source'),
   version:      getFlag('--version'),
   model:        getFlag('--model')       ?? process.env.CURSOR_AGENT_MODEL ?? 'claude-sonnet-4-5',
+  modelFast:    parseFastFlag(getFlag('--fast')),
   apiKey:       getFlag('--api-key')     ?? process.env.CURSOR_API_KEY,
   skillsDir:    resolveFromRoot(getFlag('--skills-dir') ?? process.env.SKILLS_DIR    ?? 'skills'),
   skillsUrl:    getFlag('--skills-url')  ?? process.env.SKILLS_REPO_URL              ?? 'https://github.com/hayageek/security_skills',
@@ -156,7 +166,7 @@ if (!opts.apiKey && command !== '--help' && command !== '-h' && command) {
 function printSkillHeader(label: string, skillPath: string, cwd: string) {
   log.raw(`\n${C.bold}── Cursor SDK (${label}) ${'─'.repeat(Math.max(0, 44 - label.length))}${C.reset}`);
   log.raw(`  ${C.cyan}SKILL${C.reset} : ${skillPath}`);
-  log.raw(`  ${C.cyan}MODEL${C.reset} : ${opts.model}`);
+  log.raw(`  ${C.cyan}MODEL${C.reset} : ${opts.model} (fast=${opts.modelFast})`);
   log.raw(`  ${C.cyan}CWD${C.reset}   : ${cwd}`);
   log.raw(`${C.bold}────────────────────────────────────────────────────────${C.reset}\n`);
 }
@@ -243,6 +253,7 @@ async function runScan() {
       {
         cwd:              workspacePath,
         model:            opts.model,
+        modelFast:        opts.modelFast,
         apiKey:           opts.apiKey,
         debug:            opts.debug,
         onChunk:          (chunk) => process.stdout.write(chunk),
@@ -324,7 +335,8 @@ async function runScan() {
             vulnJson,
             cwd:     workspacePath,
             destDir: path.join(opts.reportsDir, (v as Record<string, unknown>).finding_id as string),
-            model:   opts.model,
+            model:     opts.model,
+            modelFast: opts.modelFast,
             apiKey:  opts.apiKey,
             debug:   opts.debug,
             onChunk: (chunk) => process.stdout.write(chunk),
@@ -448,7 +460,8 @@ async function runExploit() {
         vulnJson,
         cwd:     workspacePath,
         destDir: exploitDestDir,
-        model:   opts.model,
+        model:     opts.model,
+        modelFast: opts.modelFast,
         apiKey:  opts.apiKey,
         debug:   opts.debug,
         onChunk: (chunk) => process.stdout.write(chunk),
@@ -666,6 +679,7 @@ Queue-exploit options:
 
 Shared options:
   --model     <model>          Cursor model ID         (env: CURSOR_AGENT_MODEL, default: claude-sonnet-4-5)
+  --fast      <true|false>     Composer 2.5 fast tier  (env: CURSOR_AGENT_MODEL_FAST, default: false)
   --api-key   <key>            Cursor API key          (env: CURSOR_API_KEY)
   --workspace <dir>            Working directory       (default: /tmp/secscan-cli)
   --skills-dir <dir>           Local skills folder     (env: SKILLS_DIR, default: ./skills)

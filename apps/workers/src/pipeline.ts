@@ -770,7 +770,7 @@ export const EMPTY_CVE_SCAN_OUTPUT =
   '<<<CVE_HUNTER_FINDINGS_JSON>>>\n[]\n<<<END_CVE_HUNTER_FINDINGS_JSON>>>\n' +
   '<<<CVE_HUNTER_DROPS_JSON>>>\n[]\n<<<END_CVE_HUNTER_DROPS_JSON>>>';
 
-export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'modelFast' | 'apiKey' | 'debug' | 'onChunk'> {
   /** Run the Semgrep candidate scan before the agent (default: true). */
   semgrepEnabled?: boolean;
   /** Semgrep binary (default: semgrep). */
@@ -845,6 +845,7 @@ export async function runCveScan(
     promptSuffix: candidateJson,
     cwd:       opts.cwd,
     model:     opts.model,
+    modelFast: opts.modelFast,
     apiKey:    opts.apiKey,
     debug:     opts.debug,
     onChunk:   opts.onChunk,
@@ -861,7 +862,7 @@ export async function runCveScan(
 
 // ── runExploitGen ─────────────────────────────────────────────────
 
-export interface ExploitGenOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface ExploitGenOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'modelFast' | 'apiKey' | 'debug' | 'onChunk'> {
   /** JSON string describing the vulnerability (passed as prompt suffix). */
   vulnJson: string;
   /** Directory where artifact files (report.md, result.txt, error.txt) are copied. */
@@ -893,6 +894,7 @@ export async function runExploitGen(
     promptSuffix: opts.vulnJson,
     cwd:          opts.cwd,
     model:        opts.model,
+    modelFast:    opts.modelFast,
     apiKey:       opts.apiKey,
     debug:        opts.debug,
     onChunk:      opts.onChunk,

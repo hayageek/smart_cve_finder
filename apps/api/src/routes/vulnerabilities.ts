@@ -174,6 +174,7 @@ router.get('/', async (req, res) => {
 const droppedQuerySchema = z.object({
   page:       z.coerce.number().min(1).default(1),
   pageSize:   z.coerce.number().min(1).max(100).default(20),
+  severity:   z.string().optional(),
   dropReason: z.string().optional(),
   cwe:        z.string().optional(),
   vulnType:   z.string().optional(),
@@ -231,6 +232,7 @@ router.get('/dropped', async (req, res) => {
   try {
     const q = droppedQuerySchema.parse(req.query);
     const where: Record<string, unknown> = { dropped: true };
+    if (q.severity)   where.severity = { in: q.severity.split(',') };
     if (q.dropReason) where.dropReason = q.dropReason;
     if (q.cwe)        where.cwe = { contains: q.cwe, mode: 'insensitive' };
     if (q.vulnType)   where.vulnType = { contains: q.vulnType, mode: 'insensitive' };
@@ -592,6 +594,23 @@ router.post('/bulk-exploit', async (req, res) => {
     }
 
     res.json({ queued: vulns.length });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.delete('/bulk', async (req, res) => {
+  try {
+    const body = z.object({ ids: z.array(z.string()).min(1) }).parse(req.body ?? {});
+    const where = { id: { in: body.ids } };
+
+    const vulns = await prisma.vulnerability.findMany({
+      where,
+      select: { id: true, reportPath: true, exploitPath: true, payloadPath: true },
+    });
+    for (const vuln of vulns) deleteFindingArtifacts(vuln);
+    const { count } = await prisma.vulnerability.deleteMany({ where });
+    res.json({ ok: true, deleted: count });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
