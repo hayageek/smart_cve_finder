@@ -116,7 +116,7 @@ export function Sidebar() {
       <div className="px-4 py-4 border-b border-border">
         <div className="flex items-center gap-2">
           <ShieldAlert className="w-5 h-5 text-primary" />
-          <span className="font-semibold text-sm text-foreground">SecScan</span>
+          <span className="font-semibold text-sm text-foreground">SmartSAST</span>
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">Security Repository Scanner</p>
       </div>
