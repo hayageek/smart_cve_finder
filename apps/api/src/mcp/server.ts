@@ -25,22 +25,22 @@ export function createMcpServer(): McpServer {
     },
     {
       instructions: [
-        'MCP server for SecScan vulnerability research.',
+        'MCP server for Repo/Package vulnerability research.',
         'finding_id is the Vulnerability.id (UUID) shown in the SecScan UI.',
-        'Use get_next_unexploited_finding to claim the next finding with no exploit (IDE workflow).',
-        'Use search_findings to discover IDs by cwe_id, repo_url, or org.',
-        'Use save_finding_artifacts with full file TEXT (not host paths). Prefer report_md_base64 for large files.',
+        'Use code_scan_get_next_unexploited_finding to claim the next finding with no exploit (IDE workflow).',
+        'Use code_scan_search_findings to discover IDs by cwe_id, repo_url, or org.',
+        'Use code_scan_save_finding_artifacts with full file TEXT (not host paths). Prefer report_md_base64 for large files.',
         'Files are written under REPORTS_DIR on the API server (Docker volume), not on your laptop path.',
-        'Use set_finding_exploitable after analysis (maps to exploitStatus done/failed).',
-        'Use enqueue_scan to add git repos or registry packages (npm, pip, cargo, go, gem) to the scanner queue (same rules as CSV import).',
-        'Use get_scan_status to check repo/scan job progress by repo_id, repo_url, or scan_job_id.',
-        'Use get_scan_queue_stats for BullMQ queue depths and pending DB scan jobs.',
+        'Use code_scan_set_finding_exploitable after analysis (maps to exploitStatus done/failed).',
+        'Use code_scan_enqueue_scan to add git repos or registry packages (npm, pip, cargo, go, gem) to the scanner queue (same rules as CSV import).',
+        'Use code_scan_get_scan_status to check repo/scan job progress by repo_id, repo_url, or scan_job_id.',
+        'Use code_scan_get_scan_queue_stats for BullMQ queue depths and pending DB scan jobs.',
       ].join(' '),
     },
   );
 
   server.tool(
-    'get_finding_details',
+    'code_scan_get_finding_details',
     'Get full vulnerability details and artifact contents (report.md, exploit.py, payload.py) by finding_id',
     { finding_id: z.string().describe('Vulnerability.id (UUID)') },
     async ({ finding_id }) => {
@@ -58,7 +58,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'get_next_unexploited_finding',
+    'code_scan_get_next_unexploited_finding',
     'Get the next vulnerability with no exploit available (exploitStatus null) for IDE research, highest severity first',
     {
       cwe_id: z.string().optional().describe('CWE filter, e.g. CWE-94'),
@@ -82,7 +82,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'search_findings',
+    'code_scan_search_findings',
     'Search vulnerabilities by CWE, repository URL, and/or GitHub/GitLab org',
     {
       cwe_id: z.string().optional().describe('CWE filter, e.g. CWE-94'),
@@ -107,7 +107,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'save_finding_artifacts',
+    'code_scan_save_finding_artifacts',
     'Upload report.md, payload.py, and/or exploit.py file CONTENTS to the API server (writes into Docker REPORTS_DIR). Do not pass host file paths.',
     {
       finding_id: z.string().describe('Vulnerability.id (UUID)'),
@@ -181,7 +181,7 @@ export function createMcpServer(): McpServer {
   });
 
   server.tool(
-    'enqueue_scan',
+    'code_scan_enqueue_scan',
     'Add one or more git repos or registry packages to the scanner queue. Deduplicates by canonical key. Skips already-scanned repos unless force=true.',
     {
       targets: z
@@ -224,7 +224,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'get_scan_status',
+    'code_scan_get_scan_status',
     'Get repo and scan job status. Lookup by repo_id, repo_url (canonical key or git URL), and/or scan_job_id.',
     {
       repo_id: z.string().optional().describe('Repo.id (cuid)'),
@@ -260,7 +260,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'get_scan_queue_stats',
+    'code_scan_get_scan_queue_stats',
     'Overview of scanner queue depth (BullMQ) and pending/active scan jobs in the database',
     {},
     async () => {
@@ -279,7 +279,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'set_finding_exploitable',
+    'code_scan_set_finding_exploitable',
     'Mark a finding as exploitable (exploitStatus=done) or not exploitable (exploitStatus=failed)',
     {
       finding_id: z.string().describe('Vulnerability.id (UUID)'),
@@ -304,12 +304,12 @@ export function createMcpServer(): McpServer {
 }
 
 export const MCP_TOOL_NAMES = [
-  'get_finding_details',
-  'get_next_unexploited_finding',
-  'search_findings',
-  'save_finding_artifacts',
-  'set_finding_exploitable',
-  'enqueue_scan',
-  'get_scan_status',
-  'get_scan_queue_stats',
+  'code_scan_get_finding_details',
+  'code_scan_get_next_unexploited_finding',
+  'code_scan_search_findings',
+  'code_scan_save_finding_artifacts',
+  'code_scan_set_finding_exploitable',
+  'code_scan_enqueue_scan',
+  'code_scan_get_scan_status',
+  'code_scan_get_scan_queue_stats',
 ] as const;

@@ -125,7 +125,7 @@ async function extractPackageNames(page: Page): Promise<string[]> {
     [
       ...new Set(
         els.map((el) => {
-          const href = el.getAttribute('href') ?? '';
+          const href = (el as { getAttribute(name: string): string | null }).getAttribute('href') ?? '';
           const path = href.replace(/^\/package\//, '').split('#')[0];
           return decodeURIComponent(path);
         }),

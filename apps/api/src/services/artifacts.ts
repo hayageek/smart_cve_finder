@@ -30,7 +30,7 @@ function assertNotHostPath(content: string, field: string): void {
     throw new Error(
       `${field} looks like a host file path, not file content. ` +
         'Read the file in your IDE and upload via POST /api/vulnerabilities/:id/artifacts/upload ' +
-        'or pass the full text/base64 content to save_finding_artifacts.',
+        'or pass the full text/base64 content to code_scan_save_finding_artifacts.',
     );
   }
 }
