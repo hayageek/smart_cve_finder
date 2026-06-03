@@ -11,7 +11,13 @@ import { scanQueue, exploitQueue } from '../queues/index.js';
 const router = Router();
 
 const MASKED = '***';
-const SENSITIVE = ['POSTGRES_PASSWORD', 'REDIS_PASSWORD', 'DATABASE_URL'];
+const SENSITIVE = [
+  'POSTGRES_PASSWORD',
+  'REDIS_PASSWORD',
+  'DATABASE_URL',
+  'GITHUB_TOKEN',
+  'CURSOR_API_KEY',
+];
 
 router.get('/mcp-config', (_req, res) => {
   res.json(buildMcpConfigPayload());

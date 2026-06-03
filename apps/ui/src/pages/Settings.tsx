@@ -83,8 +83,8 @@ function McpTabContent({ config }: { config: McpConfigResponse }) {
       )}
       {!config.apiKeyConfigured && (
         <p className="text-sm text-amber-600 dark:text-amber-400">
-          Set <code className="font-mono text-xs">MCP_API_KEY</code> in the API <code className="font-mono text-xs">.env</code>, export the same value as{' '}
-          <code className="font-mono text-xs">MCP_API_KEY</code> in your shell for Cursor/Claude config interpolation.
+          Set <code className="font-mono text-xs">MCP_API_KEY</code> in the API <code className="font-mono text-xs">.env</code> and restart the API — the JSON below will then include your key instead of{' '}
+          <code className="font-mono text-xs">{'${env:MCP_API_KEY}'}</code>.
         </p>
       )}
 
