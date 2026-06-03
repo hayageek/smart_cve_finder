@@ -248,6 +248,8 @@ export interface ApiVulnerability {
   payloadPath: string | null;
   exploitError: string | null;
   exploitAttempts: number | null;
+  /** Filenames under REPORTS_DIR/{id}/ when an exploit run has been attempted. */
+  artifactFiles: string[];
   createdAt: string;
   /** GitHub stargazers (from linked repo; null if unknown or non-GitHub). */
   githubStars: number | null;
@@ -270,6 +272,7 @@ export interface ApiExploitResult {
   payloadPath: string | null;
   error: string | null;
   attempts: number | null;
+  artifactFiles: string[];
   createdAt: string;
 }
 

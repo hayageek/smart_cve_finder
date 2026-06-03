@@ -61,3 +61,30 @@ export async function readArtifactText(
   if (!abs) return null;
   return fs.promises.readFile(abs, 'utf-8');
 }
+
+/** Safe basename only — rejects path segments and traversal. */
+export function isSafeArtifactBasename(filename: string): boolean {
+  return filename.length > 0
+    && filename.length <= 255
+    && !filename.includes('/')
+    && !filename.includes('\\')
+    && filename !== '.'
+    && filename !== '..'
+    && /^[\w.\-+]+$/.test(filename);
+}
+
+/** All regular files under `{REPORTS_DIR}/{findingId}/`. */
+export async function listFindingArtifactFiles(findingId: string): Promise<string[]> {
+  const dir = findingArtifactsDir(findingId);
+  if (!fs.existsSync(dir)) return [];
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  return entries.filter((e) => e.isFile()).map((e) => e.name).sort();
+}
+
+/** Resolve a file in the canonical finding artifacts directory. */
+export function resolveFindingArtifactFile(findingId: string, filename: string): string | null {
+  if (!isSafeArtifactBasename(filename)) return null;
+  const abs = path.join(findingArtifactsDir(findingId), filename);
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return null;
+  return abs;
+}

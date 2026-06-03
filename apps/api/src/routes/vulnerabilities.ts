@@ -9,6 +9,7 @@ import {
   saveFindingArtifactBuffers,
   deleteFindingArtifacts,
 } from '../services/artifacts.js';
+import { listFindingArtifactFiles } from '../lib/artifact-files.js';
 import { getNextUnexploitedFinding, setFindingExploitable } from '../services/findings.js';
 import type { PackageType } from '@secscan/shared';
 
@@ -131,7 +132,7 @@ router.get('/', async (req, res) => {
       prisma.vulnerability.count({ where }),
     ]);
 
-    const data = vulns.map((v) => ({
+    const data = await Promise.all(vulns.map(async (v) => ({
       id:             v.id,
       scanJobId:      v.scanJobId,
       repoUrl:        v.scanJob.repo.url,
@@ -159,9 +160,10 @@ router.get('/', async (req, res) => {
       payloadPath:    v.payloadPath,
       exploitError:   v.exploitError,
       exploitAttempts: v.exploitAttempts,
+      artifactFiles:  v.exploitStatus ? await listFindingArtifactFiles(v.id) : [],
       createdAt:      v.createdAt.toISOString(),
       ...repoGhFields(v.scanJob.repo),
-    }));
+    })));
 
     res.json({ data, total, page: q.page, pageSize: q.pageSize, totalPages: Math.ceil(total / q.pageSize) });
   } catch (err) {
@@ -224,8 +226,17 @@ function mapVulnRow(v: VulnWithRepo) {
     payloadPath:     v.payloadPath,
     exploitError:    v.exploitError,
     exploitAttempts: v.exploitAttempts,
+    artifactFiles:   [] as string[],
     createdAt:       v.createdAt.toISOString(),
   };
+}
+
+async function mapVulnRowWithArtifacts(v: VulnWithRepo) {
+  const row = mapVulnRow(v);
+  if (v.exploitStatus) {
+    row.artifactFiles = await listFindingArtifactFiles(v.id);
+  }
+  return row;
 }
 
 router.get('/dropped', async (req, res) => {
@@ -267,7 +278,7 @@ router.get('/dropped', async (req, res) => {
     ]);
 
     res.json({
-      data: vulns.map(mapVulnRow),
+      data: await Promise.all(vulns.map(mapVulnRowWithArtifacts)),
       total,
       page: q.page,
       pageSize: q.pageSize,

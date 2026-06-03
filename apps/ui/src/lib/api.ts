@@ -119,6 +119,7 @@ export const api = {
   // Exploits
   getExploits: (params: Record<string, unknown>) =>
     request<unknown>(`/api/exploits?${new URLSearchParams(params as Record<string, string>)}`),
+  listExploitArtifacts: (id: string) => request<{ files: string[] }>(`/api/exploits/${id}/artifacts`),
   downloadExploit: (id: string) => requestBlob(`/api/exploits/${id}/download`),
   downloadExploitFile: (id: string, filename: string) => requestBlob(`/api/exploits/${id}/files/${filename}`),
   getExploitReport: (id: string) => request<{ content: string }>(`/api/exploits/${id}/report`),

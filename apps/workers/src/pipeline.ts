@@ -643,6 +643,19 @@ export interface ExploitArtifactPaths {
   dockerRunScript: string | null;   // docker_run_script.sh
 }
 
+/** Maps well-known PoC filenames to `ExploitArtifactPaths` keys (extras copy without a key). */
+const EXPLOIT_ARTIFACT_FILENAME_KEYS: Record<string, keyof ExploitArtifactPaths> = {
+  'report.md':             'report',
+  'result.txt':            'result',
+  'error.txt':             'error',
+  'payload.py':            'payload',
+  'exploit.py':            'exploit',
+  'run.sh':                'runScript',
+  'docker_run_script.sh':  'dockerRunScript',
+};
+
+const REQUIRED_EXPLOIT_ARTIFACTS = ['report.md', 'result.txt'] as const;
+
 /**
  * Parse the `<<<EXPLOIT_RESULT_JSON>>>` block from exploit-generator output.
  * Returns null if the block is absent or malformed.
@@ -652,7 +665,8 @@ export function parseExploitResult(text: string): ExploitResultJson | null {
 }
 
 /**
- * Copy report.md, result.txt, and error.txt from `result.report_dir` into `destDir`.
+ * Copy every regular file from `result.report_dir` into `destDir`.
+ * Well-known filenames are also mapped onto `ExploitArtifactPaths` keys.
  */
 export async function collectExploitArtifacts(
   result: ExploitResultJson,
@@ -675,43 +689,32 @@ export async function collectExploitArtifacts(
     log.warn(`report_dir derived from finding_id fallback: ${reportDir}`);
   }
 
-  await mkdir(destDir, { recursive: true });
-
-  // Required artifacts — warn if missing (indicates skill output is incomplete)
-  const required: Array<[keyof ExploitArtifactPaths, string]> = [
-    ['report', 'report.md'],
-    ['result', 'result.txt'],
-  ];
-  // Optional artifacts — only produced in certain outcomes, absence is normal
-  const optional: Array<[keyof ExploitArtifactPaths, string]> = [
-    ['error',           'error.txt'],            // written only when exploit fails
-    ['payload',         'payload.py'],           // written only when a payload is generated
-    ['exploit',         'exploit.py'],           // written only when a full exploit is generated
-    ['runScript',       'run.sh'],               // install + execute harness
-    ['dockerRunScript', 'docker_run_script.sh'], // written only for Docker-based PoC runs
-  ];
-
-  for (const [key, filename] of required) {
-    const src = path.join(reportDir, filename);
-    if (existsSync(src)) {
-      const dest = path.join(destDir, filename);
-      await copyFile(src, dest);
-      paths[key] = dest;
-      log.info(`Saved artifact: ${dest}`);
-    } else {
-      log.warn(`Expected artifact not found: ${src}`);
-    }
+  if (!existsSync(reportDir)) {
+    log.warn(`report_dir does not exist: ${reportDir}`);
+    return paths;
   }
 
-  for (const [key, filename] of optional) {
-    const src = path.join(reportDir, filename);
-    if (existsSync(src)) {
-      const dest = path.join(destDir, filename);
-      await copyFile(src, dest);
-      paths[key] = dest;
-      log.info(`Saved artifact: ${dest}`);
+  await mkdir(destDir, { recursive: true });
+
+  const entries = await readdir(reportDir, { withFileTypes: true });
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+
+    const src = path.join(reportDir, ent.name);
+    const dest = path.join(destDir, ent.name);
+    await copyFile(src, dest);
+
+    const key = EXPLOIT_ARTIFACT_FILENAME_KEYS[ent.name];
+    if (key) paths[key] = dest;
+
+    log.info(`Saved artifact: ${dest}`);
+  }
+
+  for (const filename of REQUIRED_EXPLOIT_ARTIFACTS) {
+    const key = EXPLOIT_ARTIFACT_FILENAME_KEYS[filename];
+    if (key && !paths[key]) {
+      log.warn(`Expected artifact not found: ${path.join(reportDir, filename)}`);
     }
-    // Missing optional artifacts are normal — no warning
   }
 
   return paths;
@@ -722,8 +725,8 @@ export async function collectExploitArtifacts(
 /**
  * Fallback artifact collector — used when the exploit skill exits without
  * writing a proper EXPLOIT_RESULT_JSON (e.g. SDK crash, partial run).
- * Scans `searchDir` and its immediate subdirectories for the five known
- * artifact filenames and copies any it finds into `destDir`.
+ * Scans `searchDir` and its immediate subdirectories and copies every
+ * regular file into `destDir` (first occurrence wins per basename).
  */
 export async function collectArtifactsFromWorkspace(
   searchDir: string,
@@ -737,18 +740,6 @@ export async function collectArtifactsFromWorkspace(
 
   await mkdir(destDir, { recursive: true });
 
-  const files: Array<[keyof ExploitArtifactPaths, string]> = [
-    ['report',          'report.md'],
-    ['result',          'result.txt'],
-    ['error',           'error.txt'],
-    ['payload',         'payload.py'],
-    ['exploit',         'exploit.py'],
-    ['runScript',       'run.sh'],
-    ['dockerRunScript', 'docker_run_script.sh'],
-  ];
-
-  // Search the directory itself plus immediate subdirectories
-  const { readdir } = await import('fs/promises');
   const searchDirs = [searchDir];
   try {
     const entries = await readdir(searchDir, { withFileTypes: true });
@@ -757,16 +748,26 @@ export async function collectArtifactsFromWorkspace(
     }
   } catch { /* unreadable — skip */ }
 
-  for (const [key, filename] of files) {
-    for (const dir of searchDirs) {
-      const src = path.join(dir, filename);
-      if (existsSync(src)) {
-        const dest = path.join(destDir, filename);
-        await copyFile(src, dest).catch(() => {});
-        paths[key] = dest;
-        log.info(`Collected artifact (fallback): ${dest}`);
-        break;
-      }
+  const copied = new Set<string>();
+  for (const dir of searchDirs) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isFile() || copied.has(ent.name)) continue;
+
+      const src = path.join(dir, ent.name);
+      const dest = path.join(destDir, ent.name);
+      await copyFile(src, dest).catch(() => {});
+      copied.add(ent.name);
+
+      const key = EXPLOIT_ARTIFACT_FILENAME_KEYS[ent.name];
+      if (key) paths[key] = dest;
+
+      log.info(`Collected artifact (fallback): ${dest}`);
     }
   }
 

@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js';
 import {
   ARTIFACT_FILENAMES,
+  listFindingArtifactFiles,
   readArtifactText,
   type ArtifactFilename,
 } from '../lib/artifact-files.js';
@@ -179,10 +180,15 @@ export async function getFindingDetails(findingId: string) {
     'docker_run_script.sh': null,
   };
 
+  const onDisk = await listFindingArtifactFiles(findingId);
   const artifacts: Record<string, { present: boolean; content: string | null }> = {};
   for (const name of ARTIFACT_FILENAMES) {
     const content = await readArtifactText(findingId, name, pathMap[name]);
-    artifacts[name] = { present: content !== null, content };
+    artifacts[name] = { present: content !== null || onDisk.includes(name), content };
+  }
+  for (const name of onDisk) {
+    if (artifacts[name]) continue;
+    artifacts[name] = { present: true, content: null };
   }
 
   return {

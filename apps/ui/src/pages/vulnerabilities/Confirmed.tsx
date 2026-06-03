@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
-import { Copy, Check, Download, Zap, FileText, Eye, X, Trash2, CircleCheck } from 'lucide-react';
+import { Copy, Check, Zap, X, Trash2, CircleCheck } from 'lucide-react';
 import { Layout } from '../../components/Layout.tsx';
 import { DataTable, Pagination } from '../../components/ui/DataTable.tsx';
 import { Button } from '../../components/ui/Button.tsx';
@@ -12,6 +12,7 @@ import { Modal, ConfirmDialog, VULN_DETAIL_MODAL_SIZE_KEY } from '../../componen
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { ReportViewerModal } from '../../components/ReportViewerModal.tsx';
+import { ExploitArtifactDownloads } from '../../components/ExploitArtifactDownloads.tsx';
 import { Tooltip } from '../../components/ui/Tooltip.tsx';
 import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.ts';
 import type { ApiVulnerability } from '@secscan/shared';
@@ -46,14 +47,6 @@ function CveReportedCell({
   );
 }
 
-function downloadBlob(blob: Blob, filename: string) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
 function VulnDetail({
   vuln: vulnProp,
   onClose,
@@ -65,7 +58,6 @@ function VulnDetail({
 }) {
   const qc = useQueryClient();
   const [vuln, setVuln] = useState(vulnProp);
-  const [downloading, setDownloading] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
 
@@ -120,7 +112,9 @@ function VulnDetail({
     },
   });
 
-  const hasArtifacts = !!(vuln.reportPath || vuln.exploitPath || vuln.payloadPath);
+  const artifactFiles = vuln.artifactFiles ?? [];
+  const hasArtifacts = artifactFiles.length > 0
+    || !!(vuln.reportPath || vuln.exploitPath || vuln.payloadPath);
   const needsDeleteConfirm = vuln.exploitStatus !== null || hasArtifacts;
 
   const copyFindingId = async () => {
@@ -130,24 +124,6 @@ function VulnDetail({
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
       alert('Could not copy to clipboard');
-    }
-  };
-
-  const handleDownload = async (type: 'zip' | 'report' | 'exploit' | 'payload') => {
-    setDownloading(type);
-    try {
-      if (type === 'zip') {
-        const blob = await api.downloadExploit(vuln.id);
-        downloadBlob(blob, `exploit-${vuln.id}.zip`);
-        return;
-      }
-      const fileMap = { report: 'report.md', exploit: 'exploit.py', payload: 'payload.py' } as const;
-      const blob = await api.downloadExploitFile(vuln.id, fileMap[type]);
-      downloadBlob(blob, fileMap[type]);
-    } catch (err) {
-      alert(String(err));
-    } finally {
-      setDownloading(null);
     }
   };
 
@@ -294,51 +270,19 @@ function VulnDetail({
           {hasArtifacts && (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">Exploit artifacts</p>
-              <div className="flex flex-wrap gap-2">
-                {vuln.reportPath && (
-                  <>
-                    <Button size="sm" variant="outline" onClick={() => setReportOpen(true)}>
-                      <Eye className="w-3.5 h-3.5" /> View report
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      loading={downloading === 'report'}
-                      onClick={() => handleDownload('report')}
-                    >
-                      <FileText className="w-3.5 h-3.5" /> report.md
-                    </Button>
-                  </>
-                )}
-                {vuln.exploitPath && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    loading={downloading === 'exploit'}
-                    onClick={() => handleDownload('exploit')}
-                  >
-                    exploit.py
-                  </Button>
-                )}
-                {vuln.payloadPath && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    loading={downloading === 'payload'}
-                    onClick={() => handleDownload('payload')}
-                  >
-                    payload.py
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  loading={downloading === 'zip'}
-                  onClick={() => handleDownload('zip')}
-                >
-                  <Download className="w-3.5 h-3.5" /> ZIP
-                </Button>
-              </div>
+              <ExploitArtifactDownloads
+                vulnId={vuln.id}
+                files={artifactFiles.length > 0
+                  ? artifactFiles
+                  : ['report.md', 'exploit.py', 'payload.py'].filter((f) =>
+                      (f === 'report.md' && vuln.reportPath)
+                      || (f === 'exploit.py' && vuln.exploitPath)
+                      || (f === 'payload.py' && vuln.payloadPath),
+                    )}
+                onViewReport={vuln.reportPath || artifactFiles.includes('report.md')
+                  ? () => setReportOpen(true)
+                  : undefined}
+              />
             </div>
           )}
           {vuln.exploitStatus !== 'done' && vuln.exploitStatus !== 'generating' && vuln.exploitStatus !== 'pending' ? (
@@ -474,7 +418,9 @@ export default function Confirmed() {
     return selectedIds.some((id) => {
       const v = rows.find((r) => r.id === id);
       if (!v) return false;
-      return v.exploitStatus !== null || !!(v.reportPath || v.exploitPath || v.payloadPath);
+      return v.exploitStatus !== null
+        || (v.artifactFiles?.length ?? 0) > 0
+        || !!(v.reportPath || v.exploitPath || v.payloadPath);
     });
   }, [data?.data, selectedIds]);
 
