@@ -175,6 +175,8 @@ export async function getFindingDetails(findingId: string) {
     'report.md': v.reportPath,
     'exploit.py': v.exploitPath,
     'payload.py': v.payloadPath,
+    'run.sh': null,
+    'docker_run_script.sh': null,
   };
 
   const artifacts: Record<string, { present: boolean; content: string | null }> = {};

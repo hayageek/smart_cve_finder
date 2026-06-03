@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { config } from '../config.js';
 
-export const ARTIFACT_FILENAMES = ['report.md', 'exploit.py', 'payload.py'] as const;
+export const ARTIFACT_FILENAMES = ['report.md', 'exploit.py', 'payload.py', 'run.sh', 'docker_run_script.sh'] as const;
 export type ArtifactFilename = (typeof ARTIFACT_FILENAMES)[number];
 
 /** DB-safe path relative to REPORTS_DIR, e.g. `{findingId}/report.md` */

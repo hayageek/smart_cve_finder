@@ -634,11 +634,13 @@ export interface ExploitResultJson {
 
 /** Paths to artifacts after they have been copied into `destDir`. */
 export interface ExploitArtifactPaths {
-  report:  string | null;   // report.md
-  result:  string | null;   // result.txt
-  error:   string | null;   // error.txt
-  payload: string | null;   // payload.py
-  exploit: string | null;   // exploit.py
+  report:          string | null;   // report.md
+  result:          string | null;   // result.txt
+  error:           string | null;   // error.txt
+  payload:         string | null;   // payload.py
+  exploit:         string | null;   // exploit.py
+  runScript:       string | null;   // run.sh
+  dockerRunScript: string | null;   // docker_run_script.sh
 }
 
 /**
@@ -657,7 +659,9 @@ export async function collectExploitArtifacts(
   destDir: string,
   log: PipelineLogger = noopLogger,
 ): Promise<ExploitArtifactPaths> {
-  const paths: ExploitArtifactPaths = { report: null, result: null, error: null, payload: null, exploit: null };
+  const paths: ExploitArtifactPaths = {
+    report: null, result: null, error: null, payload: null, exploit: null, runScript: null, dockerRunScript: null,
+  };
 
   const reportDir =
     result.report_dir ??
@@ -680,9 +684,11 @@ export async function collectExploitArtifacts(
   ];
   // Optional artifacts — only produced in certain outcomes, absence is normal
   const optional: Array<[keyof ExploitArtifactPaths, string]> = [
-    ['error',   'error.txt'],   // written only when exploit fails
-    ['payload', 'payload.py'],  // written only when a payload is generated
-    ['exploit', 'exploit.py'],  // written only when a full exploit is generated
+    ['error',           'error.txt'],            // written only when exploit fails
+    ['payload',         'payload.py'],           // written only when a payload is generated
+    ['exploit',         'exploit.py'],           // written only when a full exploit is generated
+    ['runScript',       'run.sh'],               // install + execute harness
+    ['dockerRunScript', 'docker_run_script.sh'], // written only for Docker-based PoC runs
   ];
 
   for (const [key, filename] of required) {
@@ -724,17 +730,21 @@ export async function collectArtifactsFromWorkspace(
   destDir: string,
   log: PipelineLogger = noopLogger,
 ): Promise<ExploitArtifactPaths> {
-  const paths: ExploitArtifactPaths = { report: null, result: null, error: null, payload: null, exploit: null };
+  const paths: ExploitArtifactPaths = {
+    report: null, result: null, error: null, payload: null, exploit: null, runScript: null, dockerRunScript: null,
+  };
   if (!existsSync(searchDir)) return paths;
 
   await mkdir(destDir, { recursive: true });
 
   const files: Array<[keyof ExploitArtifactPaths, string]> = [
-    ['report',  'report.md'],
-    ['result',  'result.txt'],
-    ['error',   'error.txt'],
-    ['payload', 'payload.py'],
-    ['exploit', 'exploit.py'],
+    ['report',          'report.md'],
+    ['result',          'result.txt'],
+    ['error',           'error.txt'],
+    ['payload',         'payload.py'],
+    ['exploit',         'exploit.py'],
+    ['runScript',       'run.sh'],
+    ['dockerRunScript', 'docker_run_script.sh'],
   ];
 
   // Search the directory itself plus immediate subdirectories
@@ -910,7 +920,9 @@ export async function runExploitGen(
 
   const artifacts = exploitResult
     ? await collectExploitArtifacts(exploitResult, opts.destDir, log)
-    : { report: null, result: null, error: null, payload: null, exploit: null };
+    : {
+        report: null, result: null, error: null, payload: null, exploit: null, runScript: null, dockerRunScript: null,
+      };
 
   return { exploitResult, artifacts, rawOutput: result.text };
 }

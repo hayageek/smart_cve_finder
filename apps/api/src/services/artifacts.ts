@@ -151,12 +151,10 @@ export function deleteFindingArtifacts(vuln: {
   exploitPath: string | null;
   payloadPath: string | null;
 }): void {
-  const names: ArtifactFilename[] = ['report.md', 'exploit.py', 'payload.py'];
-  const stored = [vuln.reportPath, vuln.exploitPath, vuln.payloadPath];
+  const names: ArtifactFilename[] = ['report.md', 'exploit.py', 'payload.py', 'run.sh', 'docker_run_script.sh'];
+  const stored: Array<string | null> = [vuln.reportPath, vuln.exploitPath, vuln.payloadPath, null, null];
   for (let i = 0; i < names.length; i++) {
-    const p = stored[i];
-    if (!p) continue;
-    const abs = resolveArtifactPath(vuln.id, names[i]!, p);
+    const abs = resolveArtifactPath(vuln.id, names[i]!, stored[i] ?? null);
     if (abs) fs.rmSync(abs, { force: true });
   }
   const dir = findingArtifactsDir(vuln.id);

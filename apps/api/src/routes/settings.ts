@@ -61,13 +61,11 @@ router.post('/clear', async (req, res) => {
           where: { exploitStatus: { not: null } },
           select: { id: true, reportPath: true, exploitPath: true, payloadPath: true },
         });
-        const names: ArtifactFilename[] = ['report.md', 'exploit.py', 'payload.py'];
+        const names: ArtifactFilename[] = ['report.md', 'exploit.py', 'payload.py', 'run.sh', 'docker_run_script.sh'];
         for (const v of vulns) {
-          const stored = [v.reportPath, v.exploitPath, v.payloadPath];
+          const stored: Array<string | null> = [v.reportPath, v.exploitPath, v.payloadPath, null, null];
           for (let i = 0; i < names.length; i++) {
-            const p = stored[i];
-            if (!p) continue;
-            const abs = resolveArtifactPath(v.id, names[i]!, p);
+            const abs = resolveArtifactPath(v.id, names[i]!, stored[i] ?? null);
             if (abs) fs.rmSync(abs, { force: true });
           }
         }
