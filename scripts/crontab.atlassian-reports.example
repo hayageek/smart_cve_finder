@@ -1,0 +1,10 @@
+# Install: crontab -e
+# Paste the single line below (adjust schedule or script path if needed).
+#
+# PATH, REPO_ROOT, and bash are configured inside sync-atlassian-reports.sh.
+# Logging goes to volumes/logs/atlassian-reports-sync.log (no cron redirect needed).
+#
+# Requires: git, SSH to origin, and git user.name/email in ~/.gitconfig
+# OR REPORTS_GIT_USER_NAME / REPORTS_GIT_USER_EMAIL in the environment.
+
+*/15 * * * * /Users/rskusuma/Documents/Security/smart_cve_finder/scripts/sync-atlassian-reports.sh
