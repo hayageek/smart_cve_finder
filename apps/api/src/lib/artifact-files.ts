@@ -14,6 +14,11 @@ export function findingArtifactsDir(findingId: string): string {
   return path.join(config.REPORTS_DIR, findingId);
 }
 
+/** Repo-relative path shown in UI: `volumes/atlassian_reports/{findingId}`. */
+export function reportFolderDisplayPath(findingId: string): string {
+  return path.posix.join('volumes', 'atlassian_reports', findingId);
+}
+
 export function artifactAbsolutePath(findingId: string, filename: ArtifactFilename): string {
   return path.join(findingArtifactsDir(findingId), filename);
 }

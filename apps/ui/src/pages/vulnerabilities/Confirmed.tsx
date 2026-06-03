@@ -12,7 +12,7 @@ import { Modal, ConfirmDialog, VULN_DETAIL_MODAL_SIZE_KEY } from '../../componen
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { ReportViewerModal } from '../../components/ReportViewerModal.tsx';
-import { ExploitArtifactDownloads } from '../../components/ExploitArtifactDownloads.tsx';
+import { ExploitArtifactDownloads, ExploitArtifactFileList } from '../../components/ExploitArtifactDownloads.tsx';
 import { Tooltip } from '../../components/ui/Tooltip.tsx';
 import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.ts';
 import type { ApiVulnerability } from '@secscan/shared';
@@ -101,20 +101,38 @@ function VulnDetail({
 
   const exploitMutation = useMutation({
     mutationFn: () => api.generateExploit(vuln.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['vulns'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vulns'] });
+      qc.invalidateQueries({ queryKey: ['exploit-artifacts', vuln.id] });
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteVulnerability(vuln.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vulns'] });
+      qc.invalidateQueries({ queryKey: ['exploit-artifacts', vuln.id] });
       onClose();
     },
   });
 
-  const artifactFiles = vuln.artifactFiles ?? [];
-  const hasArtifacts = artifactFiles.length > 0
+  const { data: liveArtifacts, isLoading: artifactsLoading } = useQuery({
+    queryKey: ['exploit-artifacts', vuln.id],
+    queryFn: () => api.listExploitArtifacts(vuln.id),
+    refetchInterval: vuln.exploitStatus === 'generating' ? 5000 : false,
+  });
+
+  const artifactFiles = liveArtifacts?.files ?? vuln.artifactFiles ?? [];
+  const resolvedArtifactFiles = artifactFiles.length > 0
+    ? artifactFiles
+    : ['report.md', 'exploit.py', 'payload.py'].filter((f) =>
+        (f === 'report.md' && vuln.reportPath)
+        || (f === 'exploit.py' && vuln.exploitPath)
+        || (f === 'payload.py' && vuln.payloadPath),
+      );
+  const hasArtifacts = resolvedArtifactFiles.length > 0
     || !!(vuln.reportPath || vuln.exploitPath || vuln.payloadPath);
+  const showExploitArtifacts = hasArtifacts || vuln.exploitStatus !== null;
   const needsDeleteConfirm = vuln.exploitStatus !== null || hasArtifacts;
 
   const copyFindingId = async () => {
@@ -267,19 +285,25 @@ function VulnDetail({
           </div>
         )}
         <div className="border-t border-border pt-3 space-y-2">
-          {hasArtifacts && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">Report directory</p>
+            {artifactsLoading ? (
+              <p className="text-xs text-muted-foreground">Loading…</p>
+            ) : liveArtifacts?.reportDir ? (
+              <ExploitArtifactFileList
+                reportDir={liveArtifacts.reportDir}
+                files={resolvedArtifactFiles}
+              />
+            ) : null}
+          </div>
+          {showExploitArtifacts && resolvedArtifactFiles.length > 0 && (
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">Exploit artifacts</p>
+              <p className="text-xs text-muted-foreground">Download</p>
               <ExploitArtifactDownloads
                 vulnId={vuln.id}
-                files={artifactFiles.length > 0
-                  ? artifactFiles
-                  : ['report.md', 'exploit.py', 'payload.py'].filter((f) =>
-                      (f === 'report.md' && vuln.reportPath)
-                      || (f === 'exploit.py' && vuln.exploitPath)
-                      || (f === 'payload.py' && vuln.payloadPath),
-                    )}
-                onViewReport={vuln.reportPath || artifactFiles.includes('report.md')
+                files={resolvedArtifactFiles}
+                reportDir={liveArtifacts?.reportDir}
+                onViewReport={vuln.reportPath || resolvedArtifactFiles.includes('report.md')
                   ? () => setReportOpen(true)
                   : undefined}
               />
@@ -291,7 +315,7 @@ function VulnDetail({
             </Button>
           ) : vuln.exploitStatus === 'pending' || vuln.exploitStatus === 'generating' ? (
             <p className="text-xs text-muted-foreground">Exploit generation in progress…</p>
-          ) : !hasArtifacts ? (
+          ) : !showExploitArtifacts ? (
             <p className="text-xs text-muted-foreground">Exploit finished — no artifact files on disk.</p>
           ) : null}
           <div className="flex items-center justify-between">
