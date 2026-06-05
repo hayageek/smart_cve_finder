@@ -1,0 +1,9 @@
+on_http_request:
+  - actions:
+      - type: oauth
+        config:
+          provider: google
+  - expressions:
+      - "!(actions.ngrok.oauth.identity.email.endsWith('@hayageek.com'))"
+    actions:
+      - type: deny
