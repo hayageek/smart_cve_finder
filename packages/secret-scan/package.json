@@ -1,0 +1,29 @@
+{
+  "name": "@secscan/secret-scan",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "gitleaks.toml"
+  ],
+  "bin": {
+    "secret-scan": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && node -e \"const fs=require('fs');fs.cpSync('gitleaks.toml','dist/gitleaks.toml')\"",
+    "dev": "tsc --watch",
+    "cli": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@secscan/cve-semgrep": "*",
+    "@secscan/shared": "*",
+    "picomatch": "^4.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/picomatch": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}

@@ -32,6 +32,8 @@ model Repo {
   privateVulnerabilityReportingEnabled Boolean?
   status         String    @default("queued")
   lastScannedAt  DateTime?
+  // Last successfully scanned git commit SHA or package version string.
+  lastScannedRevision String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   scanJobs       ScanJob[]
@@ -49,6 +51,8 @@ model ScanJob {
   bullJobId    String?
   status       String          @default("pending")
   stage        String?
+  // cve | secrets | both
+  scanMode     String          @default("both")
   startedAt    DateTime?
   finishedAt   DateTime?
   error        String?
@@ -56,6 +60,7 @@ model ScanJob {
   updatedAt    DateTime        @updatedAt
 
   vulnerabilities Vulnerability[]
+  secrets         Secret[]
 
   @@index([repoId])
   @@index([status])
@@ -106,6 +111,38 @@ model Vulnerability {
   @@index([dropped])
   @@index([exploitStatus])
   @@index([cveReported])
+}
+
+model Secret {
+  id              String    @id
+  scanJobId       String
+  scanJob         ScanJob   @relation(fields: [scanJobId], references: [id], onDelete: Cascade)
+  ruleId          String
+  path            String
+  lineStart       Int
+  lineEnd         Int?
+  severity        String
+  severityRank    Int       @default(0)
+  secretType      String?
+  redactedValue   String?
+  verifyStatus    String    @default("unverified")
+  detectorName    String?
+  message         String?
+  metadataJson    Json?
+  isFalsePositive Boolean   @default(false)
+  dropped         Boolean   @default(false)
+  dropReason      String?
+  dropEvidence    String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([scanJobId])
+  @@index([severity])
+  @@index([severityRank])
+  @@index([verifyStatus])
+  @@index([isFalsePositive])
+  @@index([dropped])
 }
 
 model WorkerConfig {

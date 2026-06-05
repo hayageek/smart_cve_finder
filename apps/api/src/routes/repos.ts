@@ -8,14 +8,16 @@ import {
   entryToCreateData,
   entryToScanJobPayload,
   parseCsvRow,
+  parsedEntryToScanTarget,
   registryProvider,
   scanTargetToEntry,
   type ParsedEntry,
 } from '../lib/repo-import.js';
 import { enqueueScans } from '../services/scans.js';
 import { emitActivityEvent } from '../sockets/index.js';
-import { REGISTRY_PACKAGE_TYPES } from '@secscan/shared';
-import { type PackageType } from '@secscan/shared';
+import { evaluateRevisionGate } from '@secscan/source-revision';
+import { config } from '../config.js';
+import { REGISTRY_PACKAGE_TYPES, type PackageType, type ScanMode } from '@secscan/shared';
 import { z } from 'zod';
 
 const router = Router();
@@ -86,10 +88,15 @@ router.post('/import/manual/preview', async (req, res) => {
   }
 });
 
+const scanModeSchema = z.enum(['both', 'cve', 'secrets']).default('both');
+
 router.post('/import/manual', async (req, res) => {
   try {
-    const body = z.object({ targets: z.array(scanTargetSchema).min(1) }).parse(req.body);
-    const result = await enqueueScans(body.targets);
+    const body = z.object({
+      targets: z.array(scanTargetSchema).min(1),
+      scanMode: scanModeSchema.optional(),
+    }).parse(req.body);
+    const result = await enqueueScans(body.targets, { scanMode: body.scanMode });
     res.json({ queued: result.queued, skipped: result.skipped });
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -114,50 +121,23 @@ router.post('/import/preview', upload.single('file'), async (req, res) => {
 router.post('/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const scanMode = scanModeSchema.parse(req.body?.scanMode ?? 'both');
     const text = req.file.buffer.toString('utf-8');
     const rows: string[][] = parse(text, { skip_empty_lines: true, trim: true, relax_column_count: true });
     const parsed = rows.map(parseCsvRow).filter(Boolean) as ParsedEntry[];
 
-    // Deduplicate within file
     const seen = new Set<string>();
     const unique = parsed.filter(({ url }) => seen.has(url) ? false : (seen.add(url), true));
 
-    const existing = await prisma.repo.findMany({
-      where: { url: { in: unique.map((p) => p.url) } },
-      select: { url: true },
-    });
-    const existingSet = new Set(existing.map((r) => r.url));
-    const newItems = unique.filter(({ url }) => !existingSet.has(url));
-
-    const created = await Promise.all(
-      newItems.map((entry) => prisma.repo.create({ data: entryToCreateData(entry) })),
+    const result = await enqueueScans(unique.map(parsedEntryToScanTarget), { scanMode });
+    console.info(
+      `[revision-gate] csv import: total=${unique.length} queued=${result.queued} skipped=${result.skipped}`,
     );
 
-    let queued = 0;
-    let skippedInQueue = 0;
-    for (let i = 0; i < created.length; i++) {
-      const repo = created[i];
-      const entry = newItems[i];
-      const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending' } });
-      const result = await enqueueScanJob(repo.id, entryToScanJobPayload(entry, scanJob.id));
-      if (!result.queued) {
-        skippedInQueue++;
-        continue;
-      }
-      queued++;
-      emitActivityEvent({
-        id: scanJob.id,
-        timestamp: new Date().toISOString(),
-        type: 'info',
-        message: `Queued ${repo.packageName ?? repo.url} (${repo.packageType}) for scanning`,
-        repoUrl: repo.url,
-      });
-    }
-
     res.json({
-      queued,
-      skipped: existing.length,
-      skippedInQueue,
+      queued: result.queued,
+      skipped: result.skipped,
+      results: result.results,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -264,14 +244,48 @@ router.post('/:id/rescan', async (req, res) => {
       return res.status(409).json({ error: 'Already scanning' });
     }
 
-    const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending' } });
+    const body = z.object({
+      scanMode: scanModeSchema.optional(),
+      /** Bypass revision check and re-scan even when commit/version unchanged. */
+      force: z.boolean().optional(),
+    }).parse(req.body ?? {});
+    const scanMode = body.scanMode ?? 'both';
+    const force = body.force ?? false;
+
+    if (!force) {
+      const gate = await evaluateRevisionGate(
+        {
+          status: repo.status,
+          packageType: repo.packageType,
+          url: repo.url,
+          packageName: repo.packageName,
+          packageVersion: repo.packageVersion,
+          lastScannedRevision: repo.lastScannedRevision,
+        },
+        { force: false, githubToken: config.GITHUB_TOKEN },
+      );
+      console.info(`[revision-gate] rescan: ${gate.log}`);
+      if (gate.action === 'skip') {
+        emitActivityEvent({
+          id: repo.id,
+          timestamp: new Date().toISOString(),
+          type: 'info',
+          message: `[revision-gate] ${gate.message} — ${repo.packageName ?? repo.url}`,
+          repoUrl: repo.url,
+        });
+        return res.json({ skipped: true, reason: 'unchanged-revision', message: gate.message });
+      }
+    }
+
+    const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending', scanMode } });
     const result = await enqueueScanJob(repo.id, {
       repoUrl: repo.url,
       packageType: (repo.packageType as PackageType) ?? 'git',
       packageName: repo.packageName ?? undefined,
       packageVersion: repo.packageVersion ?? undefined,
       scanJobId: scanJob.id,
-      forceRescan: true,
+      scanMode,
+      ...(force ? { forceRescan: true } : {}),
     });
 
     if (!result.queued) {

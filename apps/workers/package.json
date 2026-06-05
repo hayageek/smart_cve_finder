@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@secscan/cve-semgrep": "*",
+    "@secscan/secret-scan": "*",
     "@cursor/sdk": "^1.0.13",
     "@prisma/client": "5.22.0",
     "@secscan/shared": "*",
+    "@secscan/source-revision": "*",
     "bullmq": "^5.12.0",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",

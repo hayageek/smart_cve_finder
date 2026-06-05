@@ -37,6 +37,7 @@ const clearTargetSchema = z.object({
     'repos',
     'scan-history',
     'vulnerabilities',
+    'secrets',
     'exploits',
     'queue-scan',
     'queue-exploit',
@@ -61,6 +62,9 @@ router.post('/clear', async (req, res) => {
         break;
       case 'vulnerabilities':
         await prisma.vulnerability.deleteMany();
+        break;
+      case 'secrets':
+        await prisma.secret.deleteMany();
         break;
       case 'exploits': {
         const vulns = await prisma.vulnerability.findMany({
@@ -90,6 +94,7 @@ router.post('/clear', async (req, res) => {
       case 'everything':
         await prisma.$transaction([
           prisma.vulnerability.deleteMany(),
+          prisma.secret.deleteMany(),
           prisma.scanJob.deleteMany(),
           prisma.repo.deleteMany(),
         ]);

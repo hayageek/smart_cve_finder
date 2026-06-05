@@ -16,6 +16,7 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@prisma/client": "5.22.0",
     "@secscan/shared": "*",
+    "@secscan/source-revision": "*",
     "archiver": "^7.0.1",
     "bullmq": "^5.12.0",
     "cors": "^2.8.5",

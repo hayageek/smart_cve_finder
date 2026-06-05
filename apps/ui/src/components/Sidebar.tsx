@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Upload, List, Activity, Clock, ShieldAlert,
-  ShieldOff, Zap, Settings, Server, ChevronRight
+  ShieldOff, KeyRound, Zap, Settings, Server, ChevronRight
 } from 'lucide-react';
 import { cn } from '../lib/utils.ts';
 import { useState } from 'react';
@@ -37,6 +37,14 @@ const nav: NavItem[] = [
     children: [
       { label: 'Confirmed', to: '/vulns/confirmed' },
       { label: 'Dropped', to: '/vulns/dropped' },
+    ],
+  },
+  {
+    label: 'Secrets',
+    icon: KeyRound,
+    children: [
+      { label: 'Confirmed', to: '/secrets/confirmed' },
+      { label: 'Dropped', to: '/secrets/dropped' },
     ],
   },
   { label: 'Exploits', icon: Zap, to: '/exploits' },

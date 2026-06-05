@@ -1,6 +1,7 @@
 import {
   type PackageType,
   type RegistryPackageType,
+  type ScanMode,
   REGISTRY_PACKAGE_TYPES,
   REGISTRY_PROVIDER,
 } from '@secscan/shared';
@@ -54,9 +55,9 @@ export function entryToCreateData(entry: ParsedEntry) {
   };
 }
 
-export function entryToScanJobPayload(entry: ParsedEntry, scanJobId: string) {
+export function entryToScanJobPayload(entry: ParsedEntry, scanJobId: string, scanMode: ScanMode = 'both') {
   if (entry.packageType === 'git') {
-    return { repoUrl: entry.url, packageType: 'git' as const, scanJobId };
+    return { repoUrl: entry.url, packageType: 'git' as const, scanJobId, scanMode };
   }
   return {
     repoUrl: entry.url,
@@ -64,6 +65,7 @@ export function entryToScanJobPayload(entry: ParsedEntry, scanJobId: string) {
     packageName: entry.packageName,
     packageVersion: entry.packageVersion,
     scanJobId,
+    scanMode,
   };
 }
 
@@ -114,5 +116,17 @@ export function scanTargetToEntry(input: ScanTargetInput): ParsedEntry | null {
     url,
     packageName: name,
     packageVersion,
+  };
+}
+
+/** Convert a parsed CSV/import entry back to a manual scan target. */
+export function parsedEntryToScanTarget(entry: ParsedEntry): ScanTargetInput {
+  if (entry.packageType === 'git') {
+    return { gitUrl: entry.url, isPrivate: entry.isPrivate };
+  }
+  return {
+    packageName: entry.packageName,
+    packageType: entry.packageType,
+    packageVersion: entry.packageVersion,
   };
 }

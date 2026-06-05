@@ -29,3 +29,17 @@ docker compose logs ui --tail=30
 
 # ── Status ───────────────────────────────────────────────────────
 docker compose ps
+
+
+
+
+# Local folder — gate only (no API key needed)
+npm run cli -w apps/workers -- secrets ./my-repo --gate-only
+# GitHub repo — download + gate only
+npm run cli -w apps/workers -- secrets https://github.com/org/repo --gate-only
+# Full pipeline with secret-finding-triage skill (needs CURSOR_API_KEY)
+npm run cli -w apps/workers -- secrets https://github.com/org/repo
+# npm package
+npm run cli -w apps/workers -- secrets lodash --type npm --gate-only
+# Keep downloaded workspace
+npm run cli -w apps/workers -- secrets https://github.com/org/repo --gate-only --keep

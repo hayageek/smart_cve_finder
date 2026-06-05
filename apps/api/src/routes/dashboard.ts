@@ -9,11 +9,13 @@ router.get('/stats', async (_req, res) => {
     const [
       repoStats,
       vulnStats,
+      secretStats,
       exploitStats,
       queueStats,
     ] = await Promise.all([
       prisma.repo.groupBy({ by: ['status'], _count: true }),
       prisma.vulnerability.groupBy({ by: ['severity', 'isFalsePositive', 'dropped'], _count: true }),
+      prisma.secret.groupBy({ by: ['severity', 'isFalsePositive', 'dropped'], _count: true }),
       prisma.vulnerability.groupBy({ by: ['exploitStatus'], where: { exploitStatus: { not: null } }, _count: true }),
       getQueueStats(),
     ]);
@@ -45,6 +47,15 @@ router.get('/stats', async (_req, res) => {
       vulnMap[g.severity] = (vulnMap[g.severity] ?? 0) + g._count;
     }
 
+    const secretMap: Record<string, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    let secretsDropped = 0;
+    let secretsFalsePositives = 0;
+    for (const g of secretStats) {
+      if (g.isFalsePositive) { secretsFalsePositives += g._count; continue; }
+      if (g.dropped) { secretsDropped += g._count; continue; }
+      secretMap[g.severity] = (secretMap[g.severity] ?? 0) + g._count;
+    }
+
     const exploitMap = Object.fromEntries(exploitStats.map((e) => [e.exploitStatus, e._count]));
 
     res.json({
@@ -63,6 +74,14 @@ router.get('/stats', async (_req, res) => {
         low: vulnMap['LOW'] ?? 0,
         dropped,
         falsePositives,
+      },
+      secrets: {
+        critical: secretMap['CRITICAL'] ?? 0,
+        high: secretMap['HIGH'] ?? 0,
+        medium: secretMap['MEDIUM'] ?? 0,
+        low: secretMap['LOW'] ?? 0,
+        dropped: secretsDropped,
+        falsePositives: secretsFalsePositives,
       },
       exploits: {
         generated: exploitMap['done'] ?? 0,

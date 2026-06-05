@@ -39,6 +39,8 @@ const schema = z.object({
   CVE_SEMGREP_ENABLED: z.string().transform((v) => v !== 'false').default('true'),
   CVE_SEMGREP_BIN: z.string().default('semgrep'),
   CVE_SEMGREP_JOBS: z.coerce.number().optional(),
+  SECRET_GITLEAKS_BIN: z.string().default('gitleaks'),
+  SECRET_TRUFFLEHOG_BIN: z.string().default('trufflehog'),
   SCANNER_CONCURRENCY: z.coerce.number().default(3),
   SCANNER_MAX_ATTEMPTS: z.coerce.number().default(2),
   SCANNER_BACKOFF_DELAY_MS: z.coerce.number().default(10000),

@@ -1,6 +1,6 @@
 import { Worker, type Job } from 'bullmq';
 import { Queue } from 'bullmq';
-import { acquireSource, injectSkills, runCveScan } from './pipeline.js';
+import { acquireSource, injectSkills, runCveScan, runSecretScan } from './pipeline.js';
 import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -15,6 +15,9 @@ import {
   type SourceAcquisitionInfo,
   type VulnerabilityFinding,
   type DroppedFinding,
+  type SecretFinding,
+  type DroppedSecretFinding,
+  type ScanMode,
   type WorkerConfig,
   type PackageType,
 } from '@secscan/shared';
@@ -23,6 +26,8 @@ import { createWorkerLogger } from './logger.js';
 import { notifyOnCritical, notifyOnScanComplete } from './notify.js';
 import { requireScanJob, updateScanJob } from './db-helpers.js';
 import { applyGitHubScanGates } from './github-gates.js';
+import { evaluateRevisionGate } from '@secscan/source-revision';
+import { simpleGit } from 'simple-git';
 
 const prisma = new PrismaClient();
 const log = createWorkerLogger('scanner');
@@ -66,6 +71,50 @@ function metadataFromDropped(d: DroppedFinding): object {
   };
 }
 
+/** Common secret columns shared by confirmed and dropped findings. */
+function secretRowFromScan(fields: {
+  ruleId: string;
+  path: string;
+  lineStart: number;
+  lineEnd: number | null;
+  severity: string;
+  secretType: string | null;
+  redactedValue: string | null;
+  verifyStatus: string;
+  detectorName: string | null;
+  message: string | null;
+  metadataJson: object;
+}) {
+  return {
+    ruleId: fields.ruleId,
+    path: fields.path,
+    lineStart: fields.lineStart,
+    lineEnd: fields.lineEnd,
+    severity: fields.severity,
+    severityRank: SEVERITY_ORDER[fields.severity] ?? 0,
+    secretType: fields.secretType,
+    redactedValue: fields.redactedValue,
+    verifyStatus: fields.verifyStatus,
+    detectorName: fields.detectorName,
+    message: fields.message,
+    metadataJson: fields.metadataJson,
+  };
+}
+
+function metadataFromDroppedSecret(d: DroppedSecretFinding): object {
+  const meta = d.extra?.metadata;
+  if (meta) return meta as object;
+  return {
+    secret_type: d.extra?.metadata?.secret_type ?? d.rule_id,
+    verify_status: d.extra?.metadata?.verify_status ?? 'unverified',
+  };
+}
+
+function resolveScanMode(mode?: ScanMode): ScanMode {
+  if (mode === 'cve' || mode === 'secrets' || mode === 'both') return mode;
+  return 'both';
+}
+
 function sourceAcquisitionFromJob(job: ScanJobData): SourceAcquisitionInfo {
   return {
     packageType: (job.packageType as PackageType) ?? 'git',
@@ -79,7 +128,10 @@ function sourceAcquisitionFromJob(job: ScanJobData): SourceAcquisitionInfo {
 export const scanWorker = new Worker<ScanJobData>(
   QUEUE_NAMES.REPO_SCAN,
   async (job: Job<ScanJobData>) => {
-    const { repoUrl, packageType, packageName, packageVersion, scanJobId, forceRescan } = job.data;
+    const { repoUrl, packageType, packageName, packageVersion, scanJobId, forceRescan, scanMode: jobScanMode } = job.data;
+    const scanMode = resolveScanMode(jobScanMode);
+    const runCve = scanMode === 'both' || scanMode === 'cve';
+    const runSecrets = scanMode === 'both' || scanMode === 'secrets';
     const jobLog = log.child({ jobId: job.id, scanJobId, repoUrl, packageType });
     const sourceAcquisition = sourceAcquisitionFromJob(job.data);
 
@@ -93,6 +145,7 @@ export const scanWorker = new Worker<ScanJobData>(
         packageName:    packageName ?? null,
         packageVersion: packageVersion ?? null,
         forceRescan:    forceRescan ?? false,
+        scanMode,
         attemptsMade:   job.attemptsMade,
         processCwd:     process.cwd(),
         WORKSPACES_DIR: config.WORKSPACES_DIR,
@@ -113,22 +166,57 @@ export const scanWorker = new Worker<ScanJobData>(
     });
     await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'cloning' } });
 
-    // Dedup check
     if (!forceRescan) {
-      const cfg = await prisma.workerConfig.findFirst();
-      const dedupHours = cfg?.dedupWindowHours ?? config.SCAN_DEDUP_WINDOW_HOURS;
-      if (dedupHours > 0) {
-        const repo = await prisma.repo.findUnique({ where: { url: repoUrl } });
-        if (repo?.lastScannedAt) {
-          const elapsed = (Date.now() - repo.lastScannedAt.getTime()) / 3600000;
-          if (elapsed < dedupHours) {
-            jobLog.info('Dedup: scanned recently, skipping');
-            await updateScanJob(prisma, scanJobId, { status: 'skipped', finishedAt: new Date() });
-            await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'skipped' } });
-            return { skipped: true };
-          }
+      const repoRecord = await prisma.repo.findUnique({ where: { url: repoUrl } });
+      if (repoRecord) {
+        const gate = await evaluateRevisionGate(
+          {
+            status: repoRecord.status,
+            packageType: repoRecord.packageType,
+            url: repoRecord.url,
+            packageName: repoRecord.packageName,
+            packageVersion: repoRecord.packageVersion,
+            lastScannedRevision: repoRecord.lastScannedRevision,
+          },
+          { force: false, githubToken: config.GITHUB_TOKEN },
+        );
+        jobLog.info({ gate: gate.log, repoUrl }, 'scanner.worker: revision-gate');
+        if (gate.action === 'skip') {
+          jobLog.info(
+            {
+              repoUrl,
+              packageType,
+              lastScannedRevision: repoRecord.lastScannedRevision,
+              remoteRevision: gate.remote.revision,
+              remoteKind: gate.remote.kind,
+            },
+            'scanner.worker: skipping — upstream commit/version unchanged (no clone)',
+          );
+          await updateScanJob(prisma, scanJobId, {
+            status: 'skipped',
+            error: gate.message,
+            finishedAt: new Date(),
+          });
+          await prisma.repo.update({
+            where: { url: repoUrl },
+            data: { status: repoRecord.status === 'failed' ? 'failed' : 'done' },
+          });
+          return { skipped: true, reason: 'unchanged-revision', remoteRevision: gate.remote.revision };
+        }
+        if (gate.lookupFailed) {
+          jobLog.warn(
+            { repoUrl, lookupError: gate.lookupError },
+            'scanner.worker: revision lookup failed; proceeding with scan (fail-open)',
+          );
+        } else if (gate.remote) {
+          jobLog.info(
+            { repoUrl, remoteRevision: gate.remote.revision, remoteKind: gate.remote.kind },
+            'scanner.worker: upstream revision changed or first scan — proceeding',
+          );
         }
       }
+    } else {
+      jobLog.info({ repoUrl }, 'scanner.worker: forceRescan=true — bypassing revision-gate');
     }
 
     const gate = await applyGitHubScanGates(prisma, repoUrl, jobLog);
@@ -146,6 +234,7 @@ export const scanWorker = new Worker<ScanJobData>(
     }
 
     const workspacePath = path.join(config.WORKSPACES_DIR, scanJobId);
+    let scannedRevision: string | undefined;
 
     const pipelineLog = {
       info:  (msg: string) => jobLog.info(msg),
@@ -208,6 +297,21 @@ export const scanWorker = new Worker<ScanJobData>(
         await prisma.repo.update({ where: { url: repoUrl }, data: { isPrivate: false } });
       }
 
+      if (packageType === 'git') {
+        try {
+          scannedRevision = (await simpleGit(workspacePath).revparse(['HEAD'])).trim();
+          jobLog.info({ repoUrl, scannedRevision }, 'scanner.worker: resolved git HEAD after clone');
+        } catch (err) {
+          jobLog.warn({ repoUrl, err: String(err) }, 'scanner.worker: could not resolve git HEAD revision');
+        }
+      } else if (acquireResult.resolvedVersion) {
+        scannedRevision = acquireResult.resolvedVersion;
+        jobLog.info(
+          { repoUrl, packageType, scannedRevision },
+          'scanner.worker: resolved package version after download',
+        );
+      }
+
       await job.updateProgress(20);
       await updateScanJob(prisma, scanJobId, { status: 'scanning', stage: 'scan' });
       await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'scanning' } });
@@ -225,48 +329,100 @@ export const scanWorker = new Worker<ScanJobData>(
 
       await job.updateProgress(35);
 
-      jobLog.info(
-        {
-          skill:         '/cve-pattern-hunter',
-          cwd:           workspacePath,
-          cwdIsAbsolute: path.isAbsolute(workspacePath),
-          model:         config.CURSOR_AGENT_MODEL,
-          modelFast:     config.CURSOR_AGENT_MODEL_FAST,
-          processCwd:    process.cwd(),
-        },
-        'scanner.worker: starting CVE scan via @cursor/sdk',
-      );
+      let findings: VulnerabilityFinding[] = [];
+      let drops: DroppedFinding[] = [];
+      let rawCveOutput = '';
+      let secretFindings: SecretFinding[] = [];
+      let secretDrops: DroppedSecretFinding[] = [];
+      let rawSecretOutput = '';
 
-      let findings: VulnerabilityFinding[];
-      let drops: DroppedFinding[];
-      let rawCveOutput: string;
-      try {
-        ({ findings, drops, rawOutput: rawCveOutput } = await runCveScan(
-          {
-            cwd:              workspacePath,
-            model:            config.CURSOR_AGENT_MODEL,
-            modelFast:        config.CURSOR_AGENT_MODEL_FAST,
-            apiKey:           config.CURSOR_API_KEY,
-            debug:            config.DEBUG_CURSOR,
-            semgrepEnabled:   config.CVE_SEMGREP_ENABLED,
-            semgrepBin:       config.CVE_SEMGREP_BIN,
-            semgrepJobs:      config.CVE_SEMGREP_JOBS,
-          },
-          pipelineLog,
-        ));
-      } catch (err: unknown) {
-        const execErr = err as { message?: string };
-        throw new Error(`cve-pattern-hunter failed: ${execErr.message}`);
-      }
+      const cveScanPromise = runCve
+        ? (async () => {
+            jobLog.info(
+              {
+                skill: '/cve-pattern-hunter',
+                cwd: workspacePath,
+                model: config.CURSOR_AGENT_MODEL,
+              },
+              'scanner.worker: starting CVE scan',
+            );
+            try {
+              return await runCveScan(
+                {
+                  cwd: workspacePath,
+                  model: config.CURSOR_AGENT_MODEL,
+                  modelFast: config.CURSOR_AGENT_MODEL_FAST,
+                  apiKey: config.CURSOR_API_KEY,
+                  debug: config.DEBUG_CURSOR,
+                  semgrepEnabled: config.CVE_SEMGREP_ENABLED,
+                  semgrepBin: config.CVE_SEMGREP_BIN,
+                  semgrepJobs: config.CVE_SEMGREP_JOBS,
+                },
+                pipelineLog,
+              );
+            } catch (err: unknown) {
+              const execErr = err as { message?: string };
+              throw new Error(`cve-pattern-hunter failed: ${execErr.message}`);
+            }
+          })()
+        : Promise.resolve({ findings: [], drops: [], rawOutput: '' });
+
+      const secretScanPromise = runSecrets
+        ? (async () => {
+            jobLog.info(
+              { skill: '/secret-finding-triage', cwd: workspacePath },
+              'scanner.worker: starting secret scan',
+            );
+            try {
+              return await runSecretScan(
+                {
+                  cwd: workspacePath,
+                  model: config.CURSOR_AGENT_MODEL,
+                  modelFast: config.CURSOR_AGENT_MODEL_FAST,
+                  apiKey: config.CURSOR_API_KEY,
+                  debug: config.DEBUG_CURSOR,
+                  gitleaksBin: config.SECRET_GITLEAKS_BIN,
+                  trufflehogBin: config.SECRET_TRUFFLEHOG_BIN,
+                  noGit: packageType !== 'git',
+                },
+                pipelineLog,
+              );
+            } catch (err: unknown) {
+              const execErr = err as { message?: string };
+              throw new Error(`secret scan failed: ${execErr.message}`);
+            }
+          })()
+        : Promise.resolve({ findings: [], drops: [], rawOutput: '' });
+
+      const [cveResult, secretResult] = await Promise.all([cveScanPromise, secretScanPromise]);
+      findings = cveResult.findings;
+      drops = cveResult.drops;
+      rawCveOutput = cveResult.rawOutput;
+      secretFindings = secretResult.findings;
+      secretDrops = secretResult.drops;
+      rawSecretOutput = secretResult.rawOutput;
 
       if (config.DEBUG_CURSOR) {
-        jobLog.debug(`\n${'─'.repeat(60)}\nCURSOR SDK OUTPUT (${rawCveOutput.length} chars):\n${rawCveOutput}\n${'─'.repeat(60)}`);
+        if (rawCveOutput) {
+          jobLog.debug(`\n${'─'.repeat(60)}\nCVE OUTPUT (${rawCveOutput.length} chars):\n${rawCveOutput}\n${'─'.repeat(60)}`);
+        }
+        if (rawSecretOutput) {
+          jobLog.debug(`\n${'─'.repeat(60)}\nSECRET OUTPUT (${rawSecretOutput.length} chars):\n${rawSecretOutput}\n${'─'.repeat(60)}`);
+        }
       } else {
-        jobLog.info({ outputChars: rawCveOutput.length, findings: findings.length, drops: drops.length }, 'CVE scan finished');
+        jobLog.info(
+          {
+            cveFindings: findings.length,
+            cveDrops: drops.length,
+            secretFindings: secretFindings.length,
+            secretDrops: secretDrops.length,
+          },
+          'Scan pipelines finished',
+        );
       }
       await job.updateProgress(75);
 
-      const validatedFindings = findings.filter((f) => {
+      const validatedFindings = runCve ? findings.filter((f) => {
         const fullPath = path.join(workspacePath, f.path);
         if (!existsSync(fullPath)) {
           jobLog.warn(
@@ -276,9 +432,9 @@ export const scanWorker = new Worker<ScanJobData>(
           return false;
         }
         return true;
-      });
+      }) : [];
 
-      const discarded = findings.length - validatedFindings.length;
+      const discarded = runCve ? findings.length - validatedFindings.length : 0;
       if (discarded > 0) {
         jobLog.warn(
           { discarded, total: findings.length, workspace: workspacePath },
@@ -286,7 +442,7 @@ export const scanWorker = new Worker<ScanJobData>(
         );
       }
 
-      if (findings.length > 0 && validatedFindings.length === 0) {
+      if (runCve && findings.length > 0 && validatedFindings.length === 0) {
         jobLog.error(
           {
             discarded:   findings.length,
@@ -301,61 +457,133 @@ export const scanWorker = new Worker<ScanJobData>(
 
       findings = validatedFindings;
 
+      const validatedSecrets = runSecrets ? secretFindings.filter((f) => {
+        const fullPath = path.join(workspacePath, f.path);
+        if (!existsSync(fullPath)) {
+          jobLog.warn(
+            { ruleId: f.rule_id, reportedPath: f.path },
+            'Secret finding discarded — path does not exist in workspace',
+          );
+          return false;
+        }
+        return true;
+      }) : [];
+      secretFindings = validatedSecrets;
+
       const workerCfg = (await prisma.workerConfig.findFirst()) as WorkerConfig | null;
       const autoQueue = workerCfg?.autoQueueExploits ?? false;
       const minSeverity = workerCfg?.exploitMinSeverity ?? config.EXPLOIT_MIN_SEVERITY;
       const includeDropped = workerCfg?.exploitIncludeDropped ?? config.EXPLOIT_INCLUDE_DROPPED;
 
-      const vulns = await Promise.all(
-        findings.map((f) =>
-          prisma.vulnerability.create({
-            data: {
-              id: uuidv7(),
-              scanJobId,
-              ...vulnRowFromScan({
-                checkId: f.check_id,
-                path: f.path,
-                lineStart: f.start.line,
-                lineEnd: f.end.line,
-                severity: f.extra.severity,
-                cwe: f.extra.metadata.cwe,
-                vulnType: f.extra.metadata.vulnerability_type,
-                message: f.extra.message,
-                metadataJson: f.extra.metadata as object,
+      const vulns = runCve
+        ? await Promise.all(
+            findings.map((f) =>
+              prisma.vulnerability.create({
+                data: {
+                  id: uuidv7(),
+                  scanJobId,
+                  ...vulnRowFromScan({
+                    checkId: f.check_id,
+                    path: f.path,
+                    lineStart: f.start.line,
+                    lineEnd: f.end.line,
+                    severity: f.extra.severity,
+                    cwe: f.extra.metadata.cwe,
+                    vulnType: f.extra.metadata.vulnerability_type,
+                    message: f.extra.message,
+                    metadataJson: f.extra.metadata as object,
+                  }),
+                },
               }),
-            },
-          }),
-        ),
-      );
+            ),
+          )
+        : [];
 
-      const droppedVulns = await Promise.all(
-        drops.map((d) => {
-          const meta = d.extra?.metadata ?? d.metadata;
-          const cwe = String(meta?.cwe ?? d.cwe ?? 'UNKNOWN');
-          return prisma.vulnerability.create({
-            data: {
-              id: uuidv7(),
-              scanJobId,
-              ...vulnRowFromScan({
-                checkId: d.check_id,
-                path: d.path,
-                lineStart: d.start?.line ?? d.line ?? 0,
-                lineEnd: d.end?.line ?? d.line_end ?? null,
-                severity: d.extra?.severity ?? d.severity ?? 'LOW',
-                cwe,
-                vulnType: String(meta?.vulnerability_type ?? d.vulnerability_type ?? '') || null,
-                message: String(d.extra?.message ?? d.message ?? '') || null,
-                metadataJson: metadataFromDropped(d),
+      const droppedVulns = runCve
+        ? await Promise.all(
+            drops.map((d) => {
+              const meta = d.extra?.metadata ?? d.metadata;
+              const cwe = String(meta?.cwe ?? d.cwe ?? 'UNKNOWN');
+              return prisma.vulnerability.create({
+                data: {
+                  id: uuidv7(),
+                  scanJobId,
+                  ...vulnRowFromScan({
+                    checkId: d.check_id,
+                    path: d.path,
+                    lineStart: d.start?.line ?? d.line ?? 0,
+                    lineEnd: d.end?.line ?? d.line_end ?? null,
+                    severity: d.extra?.severity ?? d.severity ?? 'LOW',
+                    cwe,
+                    vulnType: String(meta?.vulnerability_type ?? d.vulnerability_type ?? '') || null,
+                    message: String(d.extra?.message ?? d.message ?? '') || null,
+                    metadataJson: metadataFromDropped(d),
+                  }),
+                  dropped: true,
+                  dropReason: d.drop_reason,
+                  dropEvidence: d.drop_evidence,
+                },
+              });
+            }),
+          )
+        : [];
+
+      const secrets = runSecrets
+        ? await Promise.all(
+            secretFindings.map((f) =>
+              prisma.secret.create({
+                data: {
+                  id: uuidv7(),
+                  scanJobId,
+                  ...secretRowFromScan({
+                    ruleId: f.rule_id,
+                    path: f.path,
+                    lineStart: f.start.line,
+                    lineEnd: f.end.line ?? null,
+                    severity: f.extra.severity,
+                    secretType: f.extra.metadata.secret_type,
+                    redactedValue: f.extra.metadata.redacted_value,
+                    verifyStatus: f.extra.metadata.verify_status,
+                    detectorName: f.extra.metadata.detector_name ?? null,
+                    message: f.extra.message,
+                    metadataJson: f.extra.metadata as object,
+                  }),
+                },
               }),
-              dropped: true,
-              dropReason: d.drop_reason,
-              dropEvidence: d.drop_evidence,
-            },
-          });
-        }),
-      );
+            ),
+          )
+        : [];
 
-      const exploitVulns = autoQueue
+      const droppedSecrets = runSecrets
+        ? await Promise.all(
+            secretDrops.map((d) =>
+              prisma.secret.create({
+                data: {
+                  id: uuidv7(),
+                  scanJobId,
+                  ...secretRowFromScan({
+                    ruleId: d.rule_id,
+                    path: d.path,
+                    lineStart: d.start?.line ?? 0,
+                    lineEnd: d.end?.line ?? null,
+                    severity: d.extra?.severity ?? 'LOW',
+                    secretType: String(d.extra?.metadata?.secret_type ?? d.rule_id) || null,
+                    redactedValue: String(d.extra?.metadata?.redacted_value ?? '') || null,
+                    verifyStatus: String(d.extra?.metadata?.verify_status ?? 'unverified'),
+                    detectorName: String(d.extra?.metadata?.detector_name ?? '') || null,
+                    message: String(d.extra?.message ?? '') || null,
+                    metadataJson: metadataFromDroppedSecret(d),
+                  }),
+                  dropped: true,
+                  dropReason: d.drop_reason,
+                  dropEvidence: d.drop_evidence,
+                },
+              }),
+            ),
+          )
+        : [];
+
+      const exploitVulns = runCve && autoQueue
         ? vulns.filter((v) => SEVERITY_ORDER[v.severity] >= SEVERITY_ORDER[minSeverity])
         : [];
 
@@ -365,8 +593,10 @@ export const scanWorker = new Worker<ScanJobData>(
           minSeverity,
           includeDropped,
           confirmedFindings: vulns.length,
-          droppedFindings:   droppedVulns.length,
-          toQueueConfirmed:  exploitVulns.length,
+          droppedFindings: droppedVulns.length,
+          secretFindings: secrets.length,
+          droppedSecrets: droppedSecrets.length,
+          toQueueConfirmed: exploitVulns.length,
         },
         'scanner.worker: deciding exploit auto-queue',
       );
@@ -417,10 +647,30 @@ export const scanWorker = new Worker<ScanJobData>(
       const totalExploitsQueued = exploitVulns.length + droppedToQueue.length;
       if (totalExploitsQueued > 0) {
         await updateScanJob(prisma, scanJobId, { status: 'exploiting', stage: 'exploit-gen' });
-        await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'exploiting', lastScannedAt: new Date() } });
+        await prisma.repo.update({
+          where: { url: repoUrl },
+          data: {
+            status: 'exploiting',
+            lastScannedAt: new Date(),
+            ...(scannedRevision ? { lastScannedRevision: scannedRevision } : {}),
+          },
+        });
       } else {
         await updateScanJob(prisma, scanJobId, { status: 'done', finishedAt: new Date() });
-        await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'done', lastScannedAt: new Date() } });
+        await prisma.repo.update({
+          where: { url: repoUrl },
+          data: {
+            status: 'done',
+            lastScannedAt: new Date(),
+            ...(scannedRevision ? { lastScannedRevision: scannedRevision } : {}),
+          },
+        });
+        if (scannedRevision) {
+          jobLog.info(
+            { repoUrl, scannedRevision, packageType },
+            'scanner.worker: stored lastScannedRevision after successful scan',
+          );
+        }
       }
       await job.updateProgress(90);
 
@@ -428,7 +678,13 @@ export const scanWorker = new Worker<ScanJobData>(
       if (criticals > 0) await notifyOnCritical(repoUrl, criticals);
       await notifyOnScanComplete(repoUrl, vulns.length, scanJobId);
 
-      return { vulnsFound: vulns.length, dropsFound: drops.length, exploitsQueued: totalExploitsQueued };
+      return {
+        vulnsFound: vulns.length,
+        secretsFound: secrets.length,
+        dropsFound: drops.length + secretDrops.length,
+        exploitsQueued: totalExploitsQueued,
+        scanMode,
+      };
     } finally {
       if (existsSync(workspacePath)) {
         jobLog.info({ workspacePath }, 'scanner.worker: cleaning up scan workspace');

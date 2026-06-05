@@ -121,6 +121,69 @@ export async function getPrivateVulnerabilityReportingStatus(
   }
 }
 
+export type GitHubHeadCommitResult =
+  | { ok: true; sha: string }
+  | { ok: false; code: 'not_github' | 'parse_error' | 'not_found' | 'http_error' | 'network'; message?: string };
+
+/**
+ * Resolve the default-branch HEAD commit SHA via GitHub REST API (no clone, no git binary).
+ * Uses GET /repos/{owner}/{repo}/commits?per_page=1 (latest commit on default branch).
+ */
+export async function fetchGitHubHeadCommitSha(
+  repoUrl: string,
+  options?: { token?: string; timeoutMs?: number },
+): Promise<GitHubHeadCommitResult> {
+  const normalized = normalizeGitHubCloneUrl(repoUrl) ?? repoUrl;
+  if (!normalized.includes('github.com')) {
+    return { ok: false, code: 'not_github' };
+  }
+
+  const parsed = parseGitHubUrl(normalized);
+  if (!parsed) {
+    return { ok: false, code: 'parse_error', message: 'Could not parse owner/repo from URL' };
+  }
+
+  const { owner, repo } = parsed;
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits?per_page=1`;
+  const timeout = options?.timeoutMs ?? 15_000;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    const response = await fetch(url, {
+      headers: githubHeaders(options?.token),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (response.status === 404) {
+      return { ok: false, code: 'not_found', message: `Repository ${owner}/${repo} not found` };
+    }
+
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`;
+      try {
+        const body = (await response.json()) as { message?: string };
+        if (body.message) message = body.message;
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, code: 'http_error', message };
+    }
+
+    const data = (await response.json()) as Array<{ sha?: string }>;
+    const sha = data[0]?.sha?.trim();
+    if (!sha) {
+      return { ok: false, code: 'http_error', message: 'GitHub commits response missing sha' };
+    }
+
+    return { ok: true, sha };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, code: 'network', message: msg };
+  }
+}
+
 /** Fetches repository metadata (stars, forks, etc.) from GitHub API. */
 export async function fetchRepoMetadata(
   repoUrl: string,

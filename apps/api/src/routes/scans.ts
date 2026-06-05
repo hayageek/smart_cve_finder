@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import type { PackageType } from '@secscan/shared';
+import type { PackageType, ScanMode } from '@secscan/shared';
 import { enqueueScanJob } from '../lib/scan-queue.js';
 import { scanQueue, exploitQueue, getQueueStats } from '../queues/index.js';
 
@@ -25,6 +25,7 @@ router.post('/requeue-pending', async (_req, res) => {
         packageName: repo.packageName ?? undefined,
         packageVersion: repo.packageVersion ?? undefined,
         scanJobId: job.id,
+        scanMode: (job.scanMode as ScanMode) ?? 'both',
       });
       if (result.queued) queued++;
       else skipped++;

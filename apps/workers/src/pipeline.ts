@@ -16,16 +16,19 @@ import { simpleGit } from 'simple-git';
 import {
   CWE_CVSS_MAP,
   type DroppedFinding,
+  type DroppedSecretFinding,
   type PackageType,
   type RegistryPackageType,
+  type SecretFinding,
   type Severity,
   type VulnerabilityFinding,
 } from '@secscan/shared';
 import { runSemgrepScan } from '@secscan/cve-semgrep';
+import { runSecretScanGate, type SecretCandidate } from '@secscan/secret-scan';
 import { runCursorSkill } from './cursor-runner.js';
 import type { RunSkillOptions } from './cursor-runner.js';
 
-export type { VulnerabilityFinding, DroppedFinding };
+export type { VulnerabilityFinding, DroppedFinding, SecretFinding, DroppedSecretFinding };
 
 const execFileAsync = promisify(execFile);
 
@@ -503,7 +506,7 @@ export async function injectSkills(
   const skillsDest = path.join(workspacePath, '.cursor', 'skills');
   await mkdir(skillsDest, { recursive: true });
 
-  const skills = ['cve-pattern-hunter', 'exploit-generator'];
+  const skills = ['cve-pattern-hunter', 'exploit-generator', 'secret-finding-triage'];
 
   if (existsSync(skillsDir)) {
     log.info(`Copying skills from ${skillsDir}`);
@@ -869,6 +872,223 @@ export async function runCveScan(
   log.info(`CVE scan complete: ${findings.length} findings, ${drops.length} drops`);
 
   return { findings, drops, rawOutput: result.text };
+}
+
+// ── runSecretScan ─────────────────────────────────────────────────
+
+export const EMPTY_SECRET_SCAN_OUTPUT =
+  '<<<SECRET_FINDINGS_JSON>>>\n[]\n<<<END_SECRET_FINDINGS_JSON>>>\n' +
+  '<<<SECRET_DROPS_JSON>>>\n[]\n<<<END_SECRET_DROPS_JSON>>>';
+
+export interface SecretScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'modelFast' | 'apiKey' | 'debug' | 'onChunk'> {
+  gitleaksBin?: string;
+  trufflehogBin?: string;
+  /** Scan filesystem only (no git history). Default true for registry packages. */
+  noGit?: boolean;
+}
+
+export interface SecretScanResult {
+  findings: SecretFinding[];
+  drops: DroppedSecretFinding[];
+  rawOutput: string;
+}
+
+function candidateToFinding(c: SecretCandidate, idx: number): SecretFinding {
+  return {
+    rule_id: c.ruleId,
+    finding_id: `${c.ruleId}:${c.path}:${c.lineStart}:${idx}`,
+    path: c.path,
+    start: { line: c.lineStart },
+    end: { line: c.lineEnd },
+    extra: {
+      message: c.description,
+      severity: c.severity,
+      metadata: {
+        secret_type: c.secretType,
+        redacted_value: c.redactedValue,
+        verify_status: c.verifyStatus,
+        detector_name: c.detectorName,
+        description: c.description,
+        entropy: c.entropy,
+      },
+    },
+  };
+}
+
+function normalizeDroppedSecret(raw: Record<string, unknown>): DroppedSecretFinding {
+  const extra = raw.extra as Record<string, unknown> | undefined;
+  const meta = (raw.metadata ?? extra?.metadata) as Record<string, unknown> | undefined;
+  const start = raw.start as { line?: number } | undefined;
+  const end = raw.end as { line?: number } | undefined;
+  return {
+    rule_id: String(raw.rule_id ?? 'unknown'),
+    path: String(raw.path ?? ''),
+    start: start?.line !== undefined ? { line: start.line } : undefined,
+    end: end?.line !== undefined ? { line: end.line } : undefined,
+    extra: extra as DroppedSecretFinding['extra'],
+    drop_reason: String(raw.drop_reason ?? ''),
+    drop_evidence: String(raw.drop_evidence ?? ''),
+    ...(meta ? {} : {}),
+  };
+}
+
+/**
+ * Gitleaks → TruffleHog verify → Cursor triage (unverified only).
+ * Verified-live findings skip Cursor; dead credentials are dropped automatically.
+ */
+export async function runSecretScan(
+  opts: SecretScanOptions,
+  log: PipelineLogger = noopLogger,
+): Promise<SecretScanResult> {
+  const scanLog = {
+    info: (msg: string) => log.info(msg),
+    warn: (msg: string) => log.warn(msg),
+  };
+
+  log.info(`[secret-scan] starting — cwd=${opts.cwd} noGit=${opts.noGit !== false}`);
+
+  const gate = await runSecretScanGate({
+    cwd: opts.cwd,
+    gitleaksBin: opts.gitleaksBin,
+    trufflehogBin: opts.trufflehogBin,
+    noGit: opts.noGit,
+    log: scanLog,
+  });
+
+  if (gate.skippedReason) {
+    log.warn(`[secret-scan] gate skipped: ${gate.skippedReason}`);
+    return { findings: [], drops: [], rawOutput: EMPTY_SECRET_SCAN_OUTPUT };
+  }
+
+  if (gate.candidates.length === 0) {
+    log.info(
+      `[secret-scan] no candidates` +
+        (gate.gitleaksRawCount > 0
+          ? ` (${gate.gitleaksRawCount} gitleaks hit(s), ${gate.excludedCount} excluded)`
+          : ''),
+    );
+    return { findings: [], drops: [], rawOutput: EMPTY_SECRET_SCAN_OUTPUT };
+  }
+
+  if (gate.trufflehogError) {
+    log.warn(`[secret-scan] trufflehog phase failed (fail-open): ${gate.trufflehogError}`);
+  }
+
+  log.info(
+    `[secret-scan] ${gate.gitleaksCount} gitleaks candidate(s)` +
+      (gate.excludedCount > 0 ? ` (${gate.excludedCount} excluded)` : '') +
+      `, ${gate.trufflehogCount} trufflehog match(es)`,
+  );
+
+  const confirmed: SecretFinding[] = [];
+  const autoDrops: DroppedSecretFinding[] = [];
+  const forTriage: SecretCandidate[] = [];
+
+  gate.candidates.forEach((c, idx) => {
+    if (c.verifyStatus === 'verified') {
+      confirmed.push(candidateToFinding(c, idx));
+    } else if (c.verifyStatus === 'dead') {
+      autoDrops.push({
+        rule_id: c.ruleId,
+        path: c.path,
+        start: { line: c.lineStart },
+        end: { line: c.lineEnd },
+        extra: {
+          message: c.description,
+          severity: c.severity,
+          metadata: {
+            secret_type: c.secretType,
+            redacted_value: c.redactedValue,
+            verify_status: 'dead',
+            detector_name: c.detectorName,
+          },
+        },
+        drop_reason: 'trufflehog-dead',
+        drop_evidence: `TruffleHog marked credential as inactive/dead at ${c.path}:${c.lineStart}`,
+      });
+    } else {
+      forTriage.push(c);
+    }
+  });
+
+  log.info(
+    `[secret-scan] routing — ${confirmed.length} auto-confirmed (verified), ` +
+      `${autoDrops.length} auto-dropped (dead), ${forTriage.length} for triage skill`,
+  );
+
+  let triageFindings: SecretFinding[] = [];
+  let triageDrops: DroppedSecretFinding[] = [];
+  let rawOutput = EMPTY_SECRET_SCAN_OUTPUT;
+
+  if (forTriage.length > 0) {
+    const sample = forTriage
+      .slice(0, 3)
+      .map((c) => `${c.path}:${c.lineStart} (${c.ruleId}/${c.verifyStatus})`)
+      .join('; ');
+    log.info(
+      `[secret-finding-triage] starting — ${forTriage.length} unverified candidate(s)` +
+        (sample ? ` — ${sample}${forTriage.length > 3 ? '…' : ''}` : ''),
+    );
+
+    const triagePayload = JSON.stringify(
+      {
+        candidates: forTriage.map((c) => ({
+          rule_id: c.ruleId,
+          path: c.path,
+          line: c.lineStart,
+          line_end: c.lineEnd,
+          secret_type: c.secretType,
+          redacted_value: c.redactedValue,
+          verify_status: c.verifyStatus,
+          description: c.description,
+          severity: c.severity,
+        })),
+      },
+      null,
+      2,
+    );
+
+    const skillInstruction =
+      `Follow the "secret-finding-triage" skill instructions to verify the unverified secret candidates below and prune false positives.\n` +
+      `Workspace: ${opts.cwd}\n` +
+      `Candidate list (redacted — never request raw secrets):`;
+
+    log.info(`[secret-finding-triage] skill: secret-finding-triage`);
+    log.info(`[secret-finding-triage] workspace: ${opts.cwd}`);
+    log.info(
+      `[secret-finding-triage] skill input (${triagePayload.length} chars, ${forTriage.length} candidate(s)):\n${triagePayload}`,
+    );
+
+    const result = await runCursorSkill({
+      skillPath: skillInstruction,
+      promptSuffix: triagePayload,
+      cwd:       opts.cwd,
+      model:     opts.model,
+      modelFast: opts.modelFast,
+      apiKey:    opts.apiKey,
+      debug:     opts.debug,
+      onChunk:   opts.onChunk,
+      onDebug: (msg) => log.info(`[secret-finding-triage] ${msg}`),
+    });
+
+    rawOutput = result.text;
+    triageFindings = extractJsonBlock<SecretFinding[]>(result.text, 'SECRET_FINDINGS_JSON') ?? [];
+    const rawTriageDrops = extractJsonBlock<Record<string, unknown>[]>(result.text, 'SECRET_DROPS_JSON') ?? [];
+    triageDrops = rawTriageDrops.map(normalizeDroppedSecret);
+
+    log.info(
+      `[secret-finding-triage] complete — ${triageFindings.length} confirmed, ${triageDrops.length} dropped`,
+    );
+  }
+
+  const findings = [...confirmed, ...triageFindings];
+  const drops = [...autoDrops, ...triageDrops];
+  log.info(
+    `[secret-scan] complete — ${findings.length} finding(s), ${drops.length} drop(s) ` +
+      `(${confirmed.length} verified + ${triageFindings.length} triaged, ${autoDrops.length} dead + ${triageDrops.length} triage-dropped)`,
+  );
+
+  return { findings, drops, rawOutput };
 }
 
 // ── runExploitGen ─────────────────────────────────────────────────

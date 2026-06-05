@@ -51,19 +51,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(target),
     }),
-  importManual: (targets: Record<string, unknown>[]) =>
+  importManual: (targets: Record<string, unknown>[], scanMode?: string) =>
     request<{ queued: number; skipped: number }>('/api/repos/import/manual', {
       method: 'POST',
-      body: JSON.stringify({ targets }),
+      body: JSON.stringify({ targets, scanMode }),
     }),
-  importRepos: (file: File) => {
+  importRepos: (file: File, scanMode?: string) => {
     const form = new FormData();
     form.append('file', file);
+    if (scanMode) form.append('scanMode', scanMode);
     return fetch(`${BASE}/api/repos/import`, { method: 'POST', body: form }).then((r) => r.json());
   },
   getRepos: (params: Record<string, unknown>) =>
     request<unknown>(`/api/repos?${new URLSearchParams(params as Record<string, string>)}`),
-  rescanRepo: (id: string) => request<unknown>(`/api/repos/${id}/rescan`, { method: 'POST' }),
+  rescanRepo: (id: string, scanMode?: string) =>
+    request<unknown>(`/api/repos/${id}/rescan`, {
+      method: 'POST',
+      body: JSON.stringify(scanMode ? { scanMode } : {}),
+    }),
   patchRepoVisibility: (id: string, isPrivate: boolean) =>
     request<unknown>(`/api/repos/${id}/visibility`, { method: 'PATCH', body: JSON.stringify({ isPrivate }) }),
   deleteRepo: (id: string) => request<unknown>(`/api/repos/${id}`, { method: 'DELETE' }),
@@ -114,6 +119,29 @@ export const api = {
     request<{ ok: boolean; deleted: number }>('/api/vulnerabilities/dropped', {
       method: 'DELETE',
       body: JSON.stringify({}),
+    }),
+
+  // Secrets
+  getSecrets: (params: Record<string, unknown>) =>
+    request<unknown>(`/api/secrets?${new URLSearchParams(params as Record<string, string>)}`),
+  getSecret: (id: string) => request<unknown>(`/api/secrets/${id}`),
+  setSecretFalsePositive: (id: string, value: boolean) =>
+    request<unknown>(`/api/secrets/${id}/false-positive`, { method: 'PATCH', body: JSON.stringify({ value }) }),
+  deleteSecret: (id: string) =>
+    request<{ ok: boolean; id: string }>(`/api/secrets/${id}`, { method: 'DELETE' }),
+  deleteSecretsBulk: (ids: string[]) =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
+    }),
+  getDroppedSecrets: (params: Record<string, unknown>) =>
+    request<unknown>(`/api/secrets/dropped?${new URLSearchParams(params as Record<string, string>)}`),
+  promoteDroppedSecret: (id: string) =>
+    request<unknown>(`/api/secrets/dropped/${id}/promote`, { method: 'POST' }),
+  deleteDroppedSecrets: (ids: string[]) =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/dropped', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
     }),
 
   // Exploits

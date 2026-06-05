@@ -2,6 +2,9 @@
 
 export type PackageType = 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'gem';
 
+/** Which scan pipelines to run for a job. */
+export type ScanMode = 'both' | 'cve' | 'secrets';
+
 /** Registry-backed package types (everything except git). */
 export type RegistryPackageType = Exclude<PackageType, 'git'>;
 
@@ -23,6 +26,8 @@ export interface ScanJobData {
   packageVersion?: string;
   scanJobId: string;
   forceRescan?: boolean;
+  /** Default: both — run CVE hunter and secret scan pipelines. */
+  scanMode?: ScanMode;
 }
 
 export interface SourceAcquisitionInfo {
@@ -94,6 +99,48 @@ export interface DroppedFinding {
   drop_evidence: string;
 }
 
+// ── Secret scan output ───────────────────────────────────────────
+
+export type SecretVerifyStatus = 'verified' | 'unverified' | 'dead';
+
+export interface SecretFinding {
+  rule_id: string;
+  finding_id: string;
+  path: string;
+  start: { line: number; col?: number };
+  end: { line: number; col?: number };
+  extra: {
+    message: string;
+    severity: Severity;
+    metadata: {
+      secret_type: string;
+      redacted_value: string;
+      verify_status: SecretVerifyStatus;
+      detector_name?: string;
+      description?: string;
+      entropy?: number;
+    };
+  };
+}
+
+export interface DroppedSecretFinding {
+  rule_id: string;
+  path: string;
+  start?: { line: number; col?: number };
+  end?: { line: number; col?: number };
+  extra?: {
+    message?: string;
+    severity?: Severity;
+    metadata?: Record<string, unknown> & {
+      secret_type?: string;
+      redacted_value?: string;
+      verify_status?: SecretVerifyStatus;
+    };
+  };
+  drop_reason: string;
+  drop_evidence: string;
+}
+
 // ── Domain enums ─────────────────────────────────────────────────
 
 export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
@@ -126,6 +173,7 @@ export interface DashboardStats {
   repos: { total: number; queued: number; scanning: number; done: number; failed: number };
   scans: { success: number; failed: number; avgDurationMs: number };
   vulns: { critical: number; high: number; medium: number; low: number; dropped: number; falsePositives: number };
+  secrets: { critical: number; high: number; medium: number; low: number; dropped: number; falsePositives: number };
   exploits: { generated: number; pending: number; failed: number };
 }
 
@@ -197,6 +245,7 @@ export interface ApiRepo {
   lastScannedAt: string | null;
   createdAt: string;
   vulnCount: number;
+  secretCount: number;
   exploitCount: number;
 }
 
@@ -211,8 +260,37 @@ export interface ApiScanJob {
   finishedAt: string | null;
   error: string | null;
   createdAt: string;
+  scanMode: ScanMode;
   vulnCount: number;
+  secretCount: number;
   exploitCount: number;
+}
+
+export interface ApiSecret {
+  id: string;
+  scanJobId: string;
+  repoUrl: string;
+  packageRepoUrl: string | null;
+  packageTarballUrl: string | null;
+  ruleId: string;
+  path: string;
+  lineStart: number;
+  lineEnd: number | null;
+  severity: Severity;
+  secretType: string | null;
+  redactedValue: string | null;
+  verifyStatus: SecretVerifyStatus;
+  detectorName: string | null;
+  message: string | null;
+  metadataJson: Record<string, unknown> | null;
+  isFalsePositive: boolean;
+  dropped: boolean;
+  dropReason: string | null;
+  dropEvidence: string | null;
+  createdAt: string;
+  githubStars: number | null;
+  githubForks: number | null;
+  privateVulnerabilityReportingEnabled: boolean | null;
 }
 
 export interface ApiVulnerability {

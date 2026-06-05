@@ -11,6 +11,13 @@ import { api } from '../../lib/api.ts';
 import { cn } from '../../lib/utils.ts';
 
 type PackageType = 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'gem';
+type ScanMode = 'both' | 'cve' | 'secrets';
+
+const SCAN_MODES: { value: ScanMode; label: string; description: string }[] = [
+  { value: 'both', label: 'Both', description: 'CVE hunt + secret scan' },
+  { value: 'cve', label: 'CVE Hunt', description: 'Semgrep + cve-pattern-hunter only' },
+  { value: 'secrets', label: 'Secrets', description: 'Gitleaks + TruffleHog + triage only' },
+];
 
 interface PreviewRow {
   url: string;
@@ -118,6 +125,7 @@ export default function Import() {
   const [entryName, setEntryName] = useState('');
   const [entryVersion, setEntryVersion] = useState('');
   const [entryPrivate, setEntryPrivate] = useState(false);
+  const [scanMode, setScanMode] = useState<ScanMode>('both');
 
   const inputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
@@ -210,13 +218,13 @@ export default function Import() {
       let skipped = 0;
 
       if (hasFile && fileNewCount > 0) {
-        const res = await api.importRepos(file!) as { queued: number; skipped: number };
+        const res = await api.importRepos(file!, scanMode) as { queued: number; skipped: number };
         queued += res.queued;
         skipped += res.skipped;
       }
 
       if (newManual.length > 0) {
-        const res = await api.importManual(newManual.map((e) => e.target));
+        const res = await api.importManual(newManual.map((e) => e.target), scanMode);
         queued += res.queued;
         skipped += res.skipped;
       }
@@ -240,6 +248,29 @@ export default function Import() {
   return (
     <Layout title="Import" subtitle="Upload a CSV or add repos and packages manually">
       <div className="max-w-5xl space-y-6">
+
+        <Card className="p-4">
+          <p className="text-sm font-semibold mb-2">Scan type</p>
+          <p className="text-xs text-muted-foreground mb-3">Choose which pipelines run for every imported target.</p>
+          <div className="flex flex-wrap gap-2">
+            {SCAN_MODES.map((mode) => (
+              <button
+                key={mode.value}
+                type="button"
+                onClick={() => setScanMode(mode.value)}
+                className={cn(
+                  'px-3 py-2 rounded-md border text-left text-sm transition-colors min-w-[140px]',
+                  scanMode === mode.value
+                    ? 'border-primary bg-accent text-primary font-medium'
+                    : 'border-border hover:bg-accent/50 text-muted-foreground',
+                )}
+              >
+                <span className="block font-medium">{mode.label}</span>
+                <span className="block text-xs mt-0.5 opacity-80">{mode.description}</span>
+              </button>
+            ))}
+          </div>
+        </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left — file upload */}

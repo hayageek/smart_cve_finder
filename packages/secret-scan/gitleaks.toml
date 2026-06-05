@@ -1,0 +1,21 @@
+title = "SecScan secret detection"
+
+# Detection rules: inherit gitleaks' built-in rule set (~100+ rules for AWS keys,
+# GitHub PATs, private keys, JWTs, etc.). We do NOT duplicate those here.
+[extend]
+useDefault = true
+
+# Path/file exclusions are applied post-scan from packages/cve-semgrep/src/exclusions.yml
+# (same globs as Semgrep — tests, vendor, lockfiles, etc.).
+#
+# This allowlist is content-only: regexes that match the *secret value* itself to
+# skip obvious placeholders (example keys, env var templates, test prefixes).
+
+[allowlist]
+description = "Placeholder and example secret patterns"
+regexes = [
+  '''(?i)(?:example|sample|dummy|fake|placeholder|changeme|your[-_]?api[-_]?key|xxx+|000000|12345678|not[-_]?a[-_]?real)''',
+  '''(?i)^sk[-_]test[-_]''',
+  '''(?i)^AKIA000000000000000''',
+  '''(?i)^\$\{?[A-Z_]+\}?$''',
+]

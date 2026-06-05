@@ -4,6 +4,7 @@
  *
  * Usage:
  *   npm run cli --workspace=apps/workers -- scan <url-or-name> [options]
+ *   npm run cli --workspace=apps/workers -- secrets <url|path|package> [options]
  *   npm run cli --workspace=apps/workers -- exploit <vuln-json-or-file> [options]
  *
  * Scan options:
@@ -27,6 +28,8 @@
  *
  * Examples:
  *   secscan scan https://github.com/hayageek/dvwa_python
+ *   secscan secrets ./my-local-repo
+ *   secscan secrets https://github.com/org/repo --gate-only
  *   secscan scan express --type npm
  *   secscan scan django --type pip --version 4.2.0 --no-exploit
  *   secscan exploit '{"check_id":"py-cwe-94",...}'
@@ -37,13 +40,13 @@
 import { setMaxListeners } from 'events';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
-import { mkdir, rm, readFile } from 'fs/promises';
+import { mkdir, rm, readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
-import { QUEUE_NAMES, type PackageType } from '@secscan/shared';
+import { QUEUE_NAMES, type PackageType, type SecretFinding, type DroppedSecretFinding } from '@secscan/shared';
 // Raise listener limit before the SDK loads (it adds AbortSignal listeners
 // for each concurrent run; the default of 10 is too low).
 setMaxListeners(100);
@@ -51,9 +54,11 @@ import {
   acquireSource,
   injectSkills,
   runCveScan,
+  runSecretScan,
   runExploitGen,
   type PipelineLogger,
 } from './pipeline.js';
+import { runSecretScanGate } from '@secscan/secret-scan';
 
 // Load .env from the monorepo root (not from apps/workers/ where npm sets CWD).
 // import.meta.url points to the *actual* source/dist file location, so
@@ -100,7 +105,8 @@ const command = argv[0];
 
 // Find the first positional argument after the command (skip flags and their values).
 const VALUE_FLAGS = new Set(['--type','--source','--version','--model','--fast','--api-key',
-  '--workspace','--skills-url','--skills-dir','--reports-dir','--min-severity']);
+  '--workspace','--skills-url','--skills-dir','--reports-dir','--min-severity',
+  '--gitleaks-bin','--trufflehog-bin']);
 
 function parseFastFlag(raw: string | undefined): boolean {
   if (raw === undefined) return process.env.CURSOR_AGENT_MODEL_FAST === 'true';
@@ -147,11 +153,14 @@ const opts = {
   logsDir:      resolveFromRoot(process.env.LOGS_DIR    ?? './data/logs'),
   keep:         hasFlag('--keep'),
   noExploit:    hasFlag('--no-exploit'),
+  gateOnly:     hasFlag('--gate-only'),
   debug:        hasFlag('--debug') || process.env.DEBUG_CURSOR === 'true',
+  gitleaksBin:  getFlag('--gitleaks-bin') ?? process.env.SECRET_GITLEAKS_BIN ?? 'gitleaks',
+  trufflehogBin: getFlag('--trufflehog-bin') ?? process.env.SECRET_TRUFFLEHOG_BIN ?? 'trufflehog',
 };
 
 // ── API key guard ─────────────────────────────────────────────────
-if (!opts.apiKey && command !== '--help' && command !== '-h' && command) {
+if (!opts.apiKey && command !== '--help' && command !== '-h' && command && command !== 'secrets') {
   console.error(
     `\x1b[33mWARN\x1b[0m  CURSOR_API_KEY is not set.\n` +
     `       Get your key at https://cursor.com/settings and add it to .env:\n` +
@@ -160,6 +169,14 @@ if (!opts.apiKey && command !== '--help' && command !== '-h' && command) {
     `       \x1b[2m(env file loaded from: ${path.join(repoRoot, '.env')})\x1b[0m`,
   );
   // Continue — let the SDK throw its own error with context rather than fail silently.
+}
+
+if (!opts.apiKey && command === 'secrets' && !opts.gateOnly) {
+  console.error(
+    `\x1b[33mWARN\x1b[0m  CURSOR_API_KEY is not set — required for triage skill.\n` +
+    `       Use --gate-only to test gitleaks + trufflehog without Cursor,\n` +
+    `       or set CURSOR_API_KEY in .env / pass --api-key cursor_...\n`,
+  );
 }
 
 /** Print the ── Cursor SDK … ── header before a skill run. */
@@ -365,6 +382,235 @@ async function runScan() {
   log.raw(C.bold + '═'.repeat(60) + C.reset + '\n');
 
   if (!opts.keep) {
+    log.info('Cleaning up workspace (use --keep to preserve)');
+    await rm(workspacePath, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function isLocalDirectory(p: string): Promise<boolean> {
+  if (!existsSync(p)) return false;
+  try {
+    return (await stat(p)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function printSecretFinding(idx: number, f: SecretFinding): void {
+  const extra = f.extra;
+  const meta = extra.metadata;
+  const sev = String(extra.severity ?? 'UNKNOWN');
+  log.raw(
+    `  ${C.bold}[${idx}]${C.reset} ${sevColour(sev)}${sev}${C.reset}  ${C.cyan}${f.rule_id}${C.reset}  ` +
+      `${f.path}:${f.start?.line ?? '?'}  (${meta.verify_status ?? 'unknown'})`,
+  );
+}
+
+function printSecretDrop(idx: number, d: DroppedSecretFinding): void {
+  log.raw(
+    `  ${C.bold}[${idx}]${C.reset} ${C.dim}${d.rule_id}${C.reset}  ` +
+      `${d.path}:${d.start?.line ?? '?'}  (${d.drop_reason})`,
+  );
+}
+
+const SECRET_PREVIEW_LIMIT = 5;
+
+function printSecretCandidateSummary(
+  candidates: Awaited<ReturnType<typeof runSecretScanGate>>['candidates'],
+): void {
+  const byRule = new Map<string, number>();
+  const bySeverity = new Map<string, number>();
+  for (const c of candidates) {
+    byRule.set(c.ruleId, (byRule.get(c.ruleId) ?? 0) + 1);
+    bySeverity.set(c.severity, (bySeverity.get(c.severity) ?? 0) + 1);
+  }
+
+  log.raw('\n  By severity:');
+  for (const [sev, n] of [...bySeverity.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    log.raw(`    ${sev}: ${n}`);
+  }
+
+  log.raw('  By rule:');
+  for (const [rule, n] of [...byRule.entries()].sort((a, b) => b[1] - a[1])) {
+    log.raw(`    ${rule}: ${n}`);
+  }
+
+  const preview = candidates.slice(0, SECRET_PREVIEW_LIMIT);
+  if (preview.length > 0) {
+    log.raw(`\n  Locations (first ${preview.length} of ${candidates.length}):`);
+    for (const c of preview) {
+      log.raw(`    ${c.path}:${c.lineStart} (${c.ruleId}, ${c.verifyStatus})`);
+    }
+    if (candidates.length > SECRET_PREVIEW_LIMIT) {
+      log.raw(`    … and ${candidates.length - SECRET_PREVIEW_LIMIT} more`);
+    }
+  }
+}
+
+// ── SECRETS command ───────────────────────────────────────────────
+async function runSecrets() {
+  if (!target) {
+    log.error('Usage: secscan secrets <local-path|url|package> [--gate-only] [--type npm|pip|...]');
+    process.exit(1);
+  }
+
+  const plog = makePipelineLogger();
+  const localDir = await isLocalDirectory(target);
+  const workspacePath = localDir
+    ? path.resolve(target)
+    : path.join(opts.workspace, `secrets_${Date.now()}`);
+
+  if (!localDir) {
+    await mkdir(workspacePath, { recursive: true });
+  }
+
+  log.raw('\n' + C.bold + '═'.repeat(60) + C.reset);
+  log.raw(`${C.bold} SecScan CLI — Secret Scan${C.reset}`);
+  log.raw(`  Target    : ${C.cyan}${target}${C.reset}`);
+  log.raw(`  Mode      : ${opts.gateOnly ? 'gate-only (gitleaks + trufflehog)' : 'full (includes triage skill)'}`);
+  log.raw(`  Type      : ${localDir ? 'local directory' : (opts.type ?? 'auto')}`);
+  log.raw(`  Workspace : ${workspacePath}`);
+  log.raw(`  Gitleaks  : ${opts.gitleaksBin}`);
+  log.raw(`  TruffleHog: ${opts.trufflehogBin}`);
+  if (!opts.gateOnly) {
+    log.raw(`  Model     : ${opts.model}`);
+    log.raw(`  Skills    : ${opts.skillsDir}`);
+  }
+  log.raw(C.bold + '═'.repeat(60) + C.reset + '\n');
+
+  if (!localDir) {
+    log.step('1/3  Acquiring source code');
+    try {
+      const result = await acquireSource(
+        {
+          packageType: opts.type ?? 'git',
+          target,
+          version: opts.version,
+          destDir: workspacePath,
+        },
+        plog,
+      );
+      if (result.isPrivate) {
+        log.error('Source is private or inaccessible — cannot scan');
+        process.exit(1);
+      }
+      if (result.resolvedVersion) log.ok(`  Resolved: ${target}@${result.resolvedVersion}`);
+      if (result.repoUrl) log.info(`  Repo URL: ${result.repoUrl}`);
+    } catch (e: unknown) {
+      log.error('Source acquisition failed:', (e as Error).message);
+      process.exit(1);
+    }
+  } else {
+    log.step('1/3  Using local directory (skipping download)');
+  }
+
+  if (opts.gateOnly) {
+    log.step('2/3  Running secret scan gate (gitleaks + trufflehog)');
+    const gate = await runSecretScanGate({
+      cwd: workspacePath,
+      gitleaksBin: opts.gitleaksBin,
+      trufflehogBin: opts.trufflehogBin,
+      noGit: localDir ? hasFlag('--no-git') : opts.type !== 'git',
+      log: { info: (msg) => plog.info(msg), warn: (msg) => plog.warn(msg) },
+    });
+
+    if (gate.skippedReason) {
+      log.error('Secret scan gate failed:', gate.skippedReason);
+      process.exit(1);
+    }
+
+    log.step('3/3  Results');
+    const verified = gate.candidates.filter((c) => c.verifyStatus === 'verified');
+    const dead = gate.candidates.filter((c) => c.verifyStatus === 'dead');
+    const unverified = gate.candidates.filter((c) => c.verifyStatus === 'unverified');
+
+    log.raw('\n' + C.bold + '─'.repeat(60) + C.reset);
+    log.raw(`${C.bold} GATE SUMMARY${C.reset}`);
+    log.raw(`  Gitleaks raw      : ${gate.gitleaksRawCount}`);
+    log.raw(`  Excluded by path  : ${gate.excludedCount}`);
+    log.raw(`  Candidates        : ${gate.candidates.length}`);
+    log.raw(`  Verified          : ${C.green}${verified.length}${C.reset}`);
+    log.raw(`  Unverified        : ${C.yellow}${unverified.length}${C.reset}`);
+    log.raw(`  Dead              : ${C.dim}${dead.length}${C.reset}`);
+    if (gate.trufflehogError) log.warn(`  TruffleHog error   : ${gate.trufflehogError}`);
+
+    log.raw('\n' + C.bold + '─'.repeat(60) + C.reset);
+    log.raw(`${C.bold} CANDIDATES (${gate.candidates.length})${C.reset}`);
+    if (gate.candidates.length === 0) {
+      log.raw('  None.\n');
+    } else {
+      printSecretCandidateSummary(gate.candidates);
+      log.raw('');
+    }
+    return;
+  }
+
+  log.step('2/3  Injecting skills');
+  await injectSkills(
+    { workspacePath, skillsDir: opts.skillsDir, skillsRepoUrl: opts.skillsUrl, tmpDir: opts.workspace },
+    plog,
+  );
+
+  log.step('3/3  Running full secret scan (streaming triage output below)');
+  printSkillHeader('secret scan', '/secret-finding-triage', workspacePath);
+
+  let findings: SecretFinding[];
+  let drops: DroppedSecretFinding[];
+  try {
+    ({ findings, drops } = await runSecretScan(
+      {
+        cwd: workspacePath,
+        model: opts.model,
+        modelFast: opts.modelFast,
+        apiKey: opts.apiKey,
+        debug: opts.debug,
+        onChunk: (chunk) => process.stdout.write(chunk),
+        gitleaksBin: opts.gitleaksBin,
+        trufflehogBin: opts.trufflehogBin,
+        noGit: localDir ? hasFlag('--no-git') : opts.type !== 'git',
+      },
+      plog,
+    ));
+    process.stdout.write('\n');
+  } catch (e: unknown) {
+    log.error('Secret scan failed:', (e as Error).message);
+    process.exit(1);
+  }
+
+  log.raw('\n' + C.bold + '─'.repeat(60) + C.reset);
+  log.raw(`${C.bold} FINDINGS (${findings.length})${C.reset}`);
+  if (findings.length === 0) {
+    log.raw('  None.\n');
+  } else {
+    const preview = findings.slice(0, SECRET_PREVIEW_LIMIT);
+    preview.forEach((f, i) => printSecretFinding(i + 1, f));
+    if (findings.length > SECRET_PREVIEW_LIMIT) {
+      log.raw(`  … and ${findings.length - SECRET_PREVIEW_LIMIT} more`);
+    }
+    log.raw('');
+  }
+
+  log.raw('\n' + C.bold + '─'.repeat(60) + C.reset);
+  log.raw(`${C.bold} DROPPED (${drops.length})${C.reset}`);
+  if (drops.length === 0) {
+    log.raw('  None.\n');
+  } else {
+    const preview = drops.slice(0, SECRET_PREVIEW_LIMIT);
+    preview.forEach((d, i) => printSecretDrop(i + 1, d));
+    if (drops.length > SECRET_PREVIEW_LIMIT) {
+      log.raw(`  … and ${drops.length - SECRET_PREVIEW_LIMIT} more`);
+    }
+    log.raw('');
+  }
+
+  log.raw('\n' + C.bold + '═'.repeat(60) + C.reset);
+  log.raw(`${C.bold} SUMMARY${C.reset}`);
+  log.raw(`  Findings : ${C.green}${findings.length}${C.reset}`);
+  log.raw(`  Dropped  : ${C.dim}${drops.length}${C.reset}`);
+  log.raw(`  Workspace: ${workspacePath}`);
+  log.raw(C.bold + '═'.repeat(60) + C.reset + '\n');
+
+  if (!localDir && !opts.keep) {
     log.info('Cleaning up workspace (use --keep to preserve)');
     await rm(workspacePath, { recursive: true, force: true }).catch(() => {});
   }
@@ -652,7 +898,8 @@ if (!command || command === '--help' || command === '-h') {
 ${C.bold}SecScan CLI${C.reset}
 
 Commands:
-  ${C.cyan}scan <url|package>${C.reset}        Scan a git repo or registry package
+  ${C.cyan}scan <url|package>${C.reset}        Scan a git repo or registry package (CVE)
+  ${C.cyan}secrets <path|url>${C.reset}       Secret scan (gitleaks + trufflehog + triage)
   ${C.cyan}exploit <json|file>${C.reset}       Run exploit-generator on a vuln JSON
   ${C.cyan}queue-exploit${C.reset}             Select vulns from the DB and push to exploit queue
 
@@ -661,6 +908,14 @@ Scan options:
   --version <ver>                    Package version (registry packages, default: latest)
   --no-exploit                 Skip exploit generation
   --keep                       Keep workspace on disk
+
+Secrets options:
+  --gate-only                  Gitleaks + TruffleHog only (no Cursor triage skill)
+  --no-git                     Filesystem scan only (default for local dirs unless git repo)
+  --gitleaks-bin <path>        Gitleaks binary (env: SECRET_GITLEAKS_BIN)
+  --trufflehog-bin <path>      TruffleHog binary (env: SECRET_TRUFFLEHOG_BIN)
+  --type / --version           Same as scan (for remote URLs/packages)
+  --keep                       Keep downloaded workspace (remote targets only)
 
 Exploit options:
   --source <url|pkg>           Download source before running exploit
@@ -695,6 +950,18 @@ Examples:
   ${C.dim}# pip package (pinned version, no exploit)${C.reset}
   npm run cli -w apps/workers -- scan django --type pip --version 4.2.0 --no-exploit
 
+  ${C.dim}# secret scan — local folder, gate only (no API key)${C.reset}
+  npm run cli -w apps/workers -- secrets ./my-repo --gate-only
+
+  ${C.dim}# secret scan — git repo, full pipeline with triage skill${C.reset}
+  npm run cli -w apps/workers -- secrets https://github.com/org/repo
+
+  ${C.dim}# secret scan — npm package${C.reset}
+  npm run cli -w apps/workers -- secrets lodash --type npm --gate-only
+
+  ${C.dim}# gate-only via secret-scan package (local dir only)${C.reset}
+  npm run cli -w packages/secret-scan -- ./path/to/repo
+
   ${C.dim}# exploit only (no source — skill must work without source)${C.reset}
   npm run cli -w apps/workers -- exploit ./vuln.json
 
@@ -719,9 +986,10 @@ Examples:
 
 switch (command) {
   case 'scan':          runScan().catch(e         => { log.error(e); process.exit(1); }); break;
+  case 'secrets':       runSecrets().catch(e      => { log.error(e); process.exit(1); }); break;
   case 'exploit':       runExploit().catch(e      => { log.error(e); process.exit(1); }); break;
   case 'queue-exploit': queueExploit().catch(e    => { log.error(e); process.exit(1); }); break;
   default:
-    log.error(`Unknown command: ${command}. Use 'scan', 'exploit', or 'queue-exploit'.`);
+    log.error(`Unknown command: ${command}. Use 'scan', 'secrets', 'exploit', or 'queue-exploit'.`);
     process.exit(1);
 }

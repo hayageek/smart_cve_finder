@@ -1,4 +1,4 @@
-import type { PackageType } from '@secscan/shared';
+import type { PackageType, ScanMode } from '@secscan/shared';
 import { prisma } from '../db/client.js';
 import {
   enqueueScanJob,
@@ -13,10 +13,11 @@ import {
   type ScanTargetInput,
 } from '../lib/repo-import.js';
 import { emitActivityEvent } from '../sockets/index.js';
+import { evaluateRevisionGate } from '@secscan/source-revision';
 import { getQueueStats } from '../queues/index.js';
+import { config } from '../config.js';
 
-/** Repo statuses that mean a successful or intentional skip — no re-scan unless force. */
-const ALREADY_SCANNED_STATUSES = new Set(['done', 'skipped']);
+/** Repo statuses that block re-queue while a scan is in flight. */
 
 export type EnqueueScanItemResult =
   | {
@@ -29,7 +30,7 @@ export type EnqueueScanItemResult =
   | {
       url: string;
       action: 'skipped';
-      reason: 'invalid' | 'duplicate-in-request' | 'already-scanned' | 'already-in-queue';
+      reason: 'invalid' | 'duplicate-in-request' | 'already-scanned' | 'already-in-queue' | 'unchanged-revision';
       repoId?: string;
       repoStatus?: string;
       scanJobId?: string;
@@ -46,26 +47,30 @@ function formatScanJob(job: {
   id: string;
   status: string;
   stage: string | null;
+  scanMode?: string;
   bullJobId: string | null;
   startedAt: Date | null;
   finishedAt: Date | null;
   error: string | null;
   createdAt: Date;
-  _count?: { vulnerabilities: number };
+  _count?: { vulnerabilities: number; secrets: number };
   vulnerabilities?: { exploitStatus: string | null }[];
 }) {
   const vulnCount = job._count?.vulnerabilities ?? 0;
+  const secretCount = job._count?.secrets ?? 0;
   const exploitCount = job.vulnerabilities?.filter((v) => v.exploitStatus !== null).length ?? 0;
   return {
     id: job.id,
     status: job.status,
     stage: job.stage,
+    scanMode: (job.scanMode ?? 'both') as ScanMode,
     bullJobId: job.bullJobId,
     startedAt: job.startedAt?.toISOString() ?? null,
     finishedAt: job.finishedAt?.toISOString() ?? null,
     error: job.error,
     createdAt: job.createdAt.toISOString(),
     vulnCount,
+    secretCount,
     exploitCount,
     durationMs:
       job.startedAt && job.finishedAt
@@ -75,8 +80,17 @@ function formatScanJob(job: {
 }
 
 async function queueExistingRepo(
-  repo: { id: string; url: string; status: string; packageType: string; packageName: string | null; packageVersion: string | null },
+  repo: {
+    id: string;
+    url: string;
+    status: string;
+    packageType: string;
+    packageName: string | null;
+    packageVersion: string | null;
+    lastScannedRevision: string | null;
+  },
   force: boolean,
+  scanMode: ScanMode = 'both',
 ): Promise<EnqueueScanItemResult> {
   if (isRepoActivelyScanning(repo.status)) {
     return {
@@ -89,18 +103,8 @@ async function queueExistingRepo(
     };
   }
 
-  if (!force && ALREADY_SCANNED_STATUSES.has(repo.status)) {
-    return {
-      url: repo.url,
-      action: 'skipped',
-      reason: 'already-scanned',
-      repoId: repo.id,
-      repoStatus: repo.status,
-      message: 'Repo was already scanned; pass force=true to re-scan',
-    };
-  }
-
   if (!force && isRepoInScanPipeline(repo.status)) {
+    console.info(`[revision-gate] enqueue skip (in pipeline): repo=${repo.url} status=${repo.status}`);
     return {
       url: repo.url,
       action: 'skipped',
@@ -111,13 +115,45 @@ async function queueExistingRepo(
     };
   }
 
-  const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending' } });
+  const gate = await evaluateRevisionGate(repo, {
+    force,
+    githubToken: config.GITHUB_TOKEN,
+  });
+  console.info(`[revision-gate] enqueue: ${gate.log}`);
+  if (gate.action === 'skip') {
+    emitActivityEvent({
+      id: repo.id,
+      timestamp: new Date().toISOString(),
+      type: 'info',
+      message: `[revision-gate] ${gate.message} — ${repo.packageName ?? repo.url}`,
+      repoUrl: repo.url,
+    });
+    return {
+      url: repo.url,
+      action: 'skipped',
+      reason: 'unchanged-revision',
+      repoId: repo.id,
+      repoStatus: repo.status,
+      message: gate.message,
+    };
+  }
+
+  if (gate.lookupFailed) {
+    console.warn(`[revision-gate] enqueue fail-open: repo=${repo.url} error=${gate.lookupError}`);
+  } else if (gate.remote) {
+    console.info(
+      `[revision-gate] enqueue proceed: repo=${repo.url} remote=${gate.remote.kind}:${gate.remote.revision}`,
+    );
+  }
+
+  const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending', scanMode } });
   const result = await enqueueScanJob(repo.id, {
     repoUrl: repo.url,
     packageType: (repo.packageType as PackageType) ?? 'git',
     packageName: repo.packageName ?? undefined,
     packageVersion: repo.packageVersion ?? undefined,
     scanJobId: scanJob.id,
+    scanMode,
     ...(force ? { forceRescan: true } : {}),
   });
 
@@ -152,10 +188,10 @@ async function queueExistingRepo(
   };
 }
 
-async function queueNewEntry(entry: ParsedEntry): Promise<EnqueueScanItemResult> {
+async function queueNewEntry(entry: ParsedEntry, scanMode: ScanMode = 'both'): Promise<EnqueueScanItemResult> {
   const repo = await prisma.repo.create({ data: entryToCreateData(entry) });
-  const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending' } });
-  const result = await enqueueScanJob(repo.id, entryToScanJobPayload(entry, scanJob.id));
+  const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending', scanMode } });
+  const result = await enqueueScanJob(repo.id, entryToScanJobPayload(entry, scanJob.id, scanMode));
 
   if (!result.queued) {
     await prisma.scanJob.delete({ where: { id: scanJob.id } }).catch(() => undefined);
@@ -188,9 +224,10 @@ async function queueNewEntry(entry: ParsedEntry): Promise<EnqueueScanItemResult>
 
 export async function enqueueScans(
   targets: ScanTargetInput[],
-  options: { force?: boolean } = {},
+  options: { force?: boolean; scanMode?: ScanMode } = {},
 ): Promise<EnqueueScanResult> {
   const force = options.force ?? false;
+  const scanMode = options.scanMode ?? 'both';
   const results: EnqueueScanItemResult[] = [];
   const seen = new Set<string>();
 
@@ -226,13 +263,14 @@ export async function enqueueScans(
         packageType: true,
         packageName: true,
         packageVersion: true,
+        lastScannedRevision: true,
       },
     });
 
     if (existing) {
-      results.push(await queueExistingRepo(existing, force));
+      results.push(await queueExistingRepo(existing, force, scanMode));
     } else {
-      results.push(await queueNewEntry(entry));
+      results.push(await queueNewEntry(entry, scanMode));
     }
   }
 
@@ -260,7 +298,7 @@ export async function getScanStatus(params: GetScanStatusParams) {
       where: { id: scanJobId },
       include: {
         repo: true,
-        _count: { select: { vulnerabilities: true } },
+        _count: { select: { vulnerabilities: true, secrets: true } },
         vulnerabilities: { select: { exploitStatus: true, severity: true } },
       },
     });
@@ -306,7 +344,7 @@ export async function getScanStatus(params: GetScanStatusParams) {
         orderBy: { createdAt: 'desc' },
         take: 5,
         include: {
-          _count: { select: { vulnerabilities: true } },
+          _count: { select: { vulnerabilities: true, secrets: true } },
           vulnerabilities: { select: { exploitStatus: true } },
         },
       },

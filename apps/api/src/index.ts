@@ -23,6 +23,7 @@ import { REDIS_CHANNELS, type LogLine, type ActivityEvent } from '@secscan/share
 import reposRouter from './routes/repos.js';
 import scansRouter from './routes/scans.js';
 import vulnsRouter from './routes/vulnerabilities.js';
+import secretsRouter from './routes/secrets.js';
 import exploitsRouter from './routes/exploits.js';
 import workersRouter from './routes/workers.js';
 import settingsRouter from './routes/settings.js';
@@ -46,6 +47,7 @@ async function bootstrap() {
   app.use('/api/repos', reposRouter);
   app.use('/api/scans', scansRouter);
   app.use('/api/vulnerabilities', vulnsRouter);
+  app.use('/api/secrets', secretsRouter);
   app.use('/api/exploits', exploitsRouter);
   app.use('/api/workers', workersRouter);
   app.use('/api/settings', settingsRouter);
@@ -186,6 +188,7 @@ async function bootstrap() {
         repos: { total: 0, queued: 0, scanning: 0, done: 0, failed: 0 },
         scans: { success: scanSuccess, failed: scanFailed, avgDurationMs: 0 },
         vulns: { critical: 0, high: 0, medium: 0, low: 0, dropped: 0, falsePositives: 0 },
+        secrets: { critical: 0, high: 0, medium: 0, low: 0, dropped: 0, falsePositives: 0 },
         exploits: { generated: exploitDone, pending: exploitPending, failed: 0 },
       });
     } catch {}

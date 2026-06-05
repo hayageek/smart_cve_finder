@@ -15,6 +15,7 @@ const CLEAR_TARGETS = [
   { key: 'queue-exploit', label: 'Exploit Queue (exploit-gen-queue)', color: 'outline' },
   { key: 'scan-history', label: 'Scan History', color: 'outline' },
   { key: 'vulnerabilities', label: 'Confirmed Vulnerabilities', color: 'outline' },
+  { key: 'secrets', label: 'All Secrets', color: 'outline' },
   { key: 'dropped-vulns', label: 'Dropped Vulnerabilities', color: 'outline' },
   { key: 'exploits', label: 'Exploit Artifacts (files + DB)', color: 'outline' },
   { key: 'repos', label: 'All Repositories', color: 'destructive' },
