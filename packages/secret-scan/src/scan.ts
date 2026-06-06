@@ -6,6 +6,7 @@ import { runGitleaksScan, normalizeScanPath } from './gitleaks.js';
 import { findTrufflehogMatch, runTrufflehogVerify } from './trufflehog.js';
 import { redactSecret } from './redact.js';
 import { isExcludedPath } from './exclusions.js';
+import { isInvalidSecretShape } from './validate.js';
 
 const CRITICAL_RULES = new Set([
   'aws-secret-access-key',
@@ -153,20 +154,37 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
       gitleaksCount: 0,
       gitleaksRawCount: 0,
       excludedCount: 0,
+      malformedFilteredCount: 0,
       trufflehogCount: 0,
       skippedReason: msg,
     };
   }
 
   const gitleaksRawCount = gitleaksMatches.length;
+  let excludedCount = 0;
+  let malformedFilteredCount = 0;
   gitleaksMatches = gitleaksMatches.filter((gl) => {
     const relPath = normalizeScanPath(opts.cwd, gl.File);
-    return !isExcludedPath(relPath);
+    if (isExcludedPath(relPath)) {
+      excludedCount++;
+      return false;
+    }
+    const raw = resolveSecretValue(opts.cwd, gl, false);
+    if (isInvalidSecretShape(raw)) {
+      malformedFilteredCount++;
+      return false;
+    }
+    return true;
   });
-  const excludedCount = gitleaksRawCount - gitleaksMatches.length;
 
   if (excludedCount > 0) {
     log?.info(`[secret-scan] path exclusions removed ${excludedCount} gitleaks hit(s)`);
+  }
+  if (malformedFilteredCount > 0) {
+    log?.info(
+      `[secret-scan] malformed secret shape removed ${malformedFilteredCount} gitleaks hit(s) ` +
+        '(value contained {, }, [, ], ", \', or &)',
+    );
   }
 
   if (gitleaksMatches.length === 0) {
@@ -179,6 +197,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
       gitleaksCount: 0,
       gitleaksRawCount,
       excludedCount,
+      malformedFilteredCount,
       trufflehogCount: 0,
     };
   }
@@ -228,6 +247,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     gitleaksCount: gitleaksMatches.length,
     gitleaksRawCount,
     excludedCount,
+    malformedFilteredCount,
     trufflehogCount: trufflehogMatches.length,
     trufflehogError,
     severityFilteredCount,

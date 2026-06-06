@@ -26,7 +26,11 @@ import { createWorkerLogger } from './logger.js';
 import { notifyOnCritical, notifyOnScanComplete } from './notify.js';
 import { requireScanJob, updateScanJob } from './db-helpers.js';
 import { applyGitHubScanGates } from './github-gates.js';
-import { evaluateRevisionGate } from '@secscan/source-revision';
+import {
+  evaluateRevisionGate,
+  resolvePipelinesToRun,
+  storedRevisionsFromRepo,
+} from '@secscan/source-revision';
 import { simpleGit } from 'simple-git';
 
 const prisma = new PrismaClient();
@@ -130,8 +134,8 @@ export const scanWorker = new Worker<ScanJobData>(
   async (job: Job<ScanJobData>) => {
     const { repoUrl, packageType, packageName, packageVersion, scanJobId, forceRescan, scanMode: jobScanMode } = job.data;
     const scanMode = resolveScanMode(jobScanMode);
-    const runCve = scanMode === 'both' || scanMode === 'cve';
-    const runSecrets = scanMode === 'both' || scanMode === 'secrets';
+    let runCve = scanMode === 'both' || scanMode === 'cve';
+    let runSecrets = scanMode === 'both' || scanMode === 'secrets';
     const jobLog = log.child({ jobId: job.id, scanJobId, repoUrl, packageType });
     const sourceAcquisition = sourceAcquisitionFromJob(job.data);
 
@@ -177,20 +181,24 @@ export const scanWorker = new Worker<ScanJobData>(
             packageName: repoRecord.packageName,
             packageVersion: repoRecord.packageVersion,
             lastScannedRevision: repoRecord.lastScannedRevision,
+            lastCveScannedRevision: repoRecord.lastCveScannedRevision,
+            lastSecretScannedRevision: repoRecord.lastSecretScannedRevision,
           },
-          { force: false, githubToken: config.GITHUB_TOKEN },
+          { force: false, scanMode, githubToken: config.GITHUB_TOKEN },
         );
-        jobLog.info({ gate: gate.log, repoUrl }, 'scanner.worker: revision-gate');
+        jobLog.info({ gate: gate.log, repoUrl, scanMode }, 'scanner.worker: revision-gate');
         if (gate.action === 'skip') {
           jobLog.info(
             {
               repoUrl,
               packageType,
-              lastScannedRevision: repoRecord.lastScannedRevision,
+              scanMode,
+              lastCveScannedRevision: repoRecord.lastCveScannedRevision,
+              lastSecretScannedRevision: repoRecord.lastSecretScannedRevision,
               remoteRevision: gate.remote.revision,
               remoteKind: gate.remote.kind,
             },
-            'scanner.worker: skipping — upstream commit/version unchanged (no clone)',
+            'scanner.worker: skipping — all requested pipelines already scanned at this revision (no clone)',
           );
           await updateScanJob(prisma, scanJobId, {
             status: 'skipped',
@@ -203,6 +211,8 @@ export const scanWorker = new Worker<ScanJobData>(
           });
           return { skipped: true, reason: 'unchanged-revision', remoteRevision: gate.remote.revision };
         }
+        runCve = gate.pipelines.runCve;
+        runSecrets = gate.pipelines.runSecrets;
         if (gate.lookupFailed) {
           jobLog.warn(
             { repoUrl, lookupError: gate.lookupError },
@@ -210,13 +220,19 @@ export const scanWorker = new Worker<ScanJobData>(
           );
         } else if (gate.remote) {
           jobLog.info(
-            { repoUrl, remoteRevision: gate.remote.revision, remoteKind: gate.remote.kind },
-            'scanner.worker: upstream revision changed or first scan — proceeding',
+            {
+              repoUrl,
+              remoteRevision: gate.remote.revision,
+              remoteKind: gate.remote.kind,
+              runCve,
+              runSecrets,
+            },
+            'scanner.worker: upstream revision resolved — proceeding with pending pipelines',
           );
         }
       }
     } else {
-      jobLog.info({ repoUrl }, 'scanner.worker: forceRescan=true — bypassing revision-gate');
+      jobLog.info({ repoUrl, scanMode }, 'scanner.worker: forceRescan=true — bypassing revision-gate');
     }
 
     const gate = await applyGitHubScanGates(prisma, repoUrl, jobLog);
@@ -310,6 +326,45 @@ export const scanWorker = new Worker<ScanJobData>(
           { repoUrl, packageType, scannedRevision },
           'scanner.worker: resolved package version after download',
         );
+      }
+
+      if (!forceRescan && scannedRevision) {
+        const repoRecord = await prisma.repo.findUnique({ where: { url: repoUrl } });
+        if (repoRecord) {
+          const stored = storedRevisionsFromRepo(repoRecord);
+          const plan = resolvePipelinesToRun(scanMode, stored, scannedRevision, false);
+          if (plan.runCve !== runCve || plan.runSecrets !== runSecrets) {
+            jobLog.info(
+              {
+                repoUrl,
+                scanMode,
+                scannedRevision,
+                runCve: plan.runCve,
+                runSecrets: plan.runSecrets,
+              },
+              'scanner.worker: adjusted pipelines after clone based on per-pipeline revisions',
+            );
+          }
+          runCve = plan.runCve;
+          runSecrets = plan.runSecrets;
+        }
+      }
+
+      if (!runCve && !runSecrets) {
+        jobLog.info(
+          { repoUrl, scanMode, scannedRevision },
+          'scanner.worker: all requested pipelines already scanned at this revision — skipping after clone',
+        );
+        await updateScanJob(prisma, scanJobId, {
+          status: 'skipped',
+          error: 'All requested pipelines already scanned at this revision',
+          finishedAt: new Date(),
+        });
+        await prisma.repo.update({
+          where: { url: repoUrl },
+          data: { status: 'done', lastScannedAt: new Date() },
+        });
+        return { skipped: true, reason: 'unchanged-revision', remoteRevision: scannedRevision };
       }
 
       await job.updateProgress(20);
@@ -648,6 +703,14 @@ export const scanWorker = new Worker<ScanJobData>(
       }
 
       const totalExploitsQueued = exploitVulns.length + droppedToQueue.length;
+      const revisionUpdate = scannedRevision
+        ? {
+            lastScannedRevision: scannedRevision,
+            ...(runCve ? { lastCveScannedRevision: scannedRevision } : {}),
+            ...(runSecrets ? { lastSecretScannedRevision: scannedRevision } : {}),
+          }
+        : {};
+
       if (totalExploitsQueued > 0) {
         await updateScanJob(prisma, scanJobId, { status: 'exploiting', stage: 'exploit-gen' });
         await prisma.repo.update({
@@ -655,7 +718,7 @@ export const scanWorker = new Worker<ScanJobData>(
           data: {
             status: 'exploiting',
             lastScannedAt: new Date(),
-            ...(scannedRevision ? { lastScannedRevision: scannedRevision } : {}),
+            ...revisionUpdate,
           },
         });
       } else {
@@ -665,13 +728,19 @@ export const scanWorker = new Worker<ScanJobData>(
           data: {
             status: 'done',
             lastScannedAt: new Date(),
-            ...(scannedRevision ? { lastScannedRevision: scannedRevision } : {}),
+            ...revisionUpdate,
           },
         });
         if (scannedRevision) {
           jobLog.info(
-            { repoUrl, scannedRevision, packageType },
-            'scanner.worker: stored lastScannedRevision after successful scan',
+            {
+              repoUrl,
+              scannedRevision,
+              packageType,
+              runCve,
+              runSecrets,
+            },
+            'scanner.worker: stored per-pipeline revisions after successful scan',
           );
         }
       }

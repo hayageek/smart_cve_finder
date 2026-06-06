@@ -65,6 +65,8 @@ export interface SecretScanGateResult {
   /** Gitleaks hits before path exclusions. */
   gitleaksRawCount: number;
   excludedCount: number;
+  /** Gitleaks hits removed because the value contained JSON/config brackets. */
+  malformedFilteredCount?: number;
   trufflehogCount: number;
   trufflehogError?: string;
   /** Candidates removed because severity was below minSeverity. */

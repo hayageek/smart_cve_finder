@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, Trash2, ExternalLink, Lock, Globe, Package } from 'lucide-react';
-import { type ColumnDef } from '@tanstack/react-table';
+import { RefreshCw, Trash2, ExternalLink, Lock, Globe, Package, CheckCircle, AlertCircle } from 'lucide-react';
+import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
 import { Layout } from '../../components/Layout.tsx';
 import { DataTable, Pagination } from '../../components/ui/DataTable.tsx';
 import { Button } from '../../components/ui/Button.tsx';
@@ -10,8 +10,15 @@ import { Select } from '../../components/ui/Select.tsx';
 import { Badge, StatusBadge } from '../../components/ui/Badge.tsx';
 import { ConfirmDialog } from '../../components/ui/Dialog.tsx';
 import { api } from '../../lib/api.ts';
-import { formatRelative } from '../../lib/utils.ts';
-import { cn } from '../../lib/utils.ts';
+import { formatRelative, cn } from '../../lib/utils.ts';
+
+type ScanMode = 'both' | 'cve' | 'secrets';
+
+const SCAN_MODES: { value: ScanMode; label: string }[] = [
+  { value: 'both', label: 'Both' },
+  { value: 'cve', label: 'CVE Hunt' },
+  { value: 'secrets', label: 'Secrets' },
+];
 
 interface Repo {
   id: string;
@@ -36,6 +43,8 @@ const PKG_PILL: Record<string, string> = {
   go: 'text-cyan-700 bg-cyan-50 border-cyan-200',
   gem: 'text-rose-700 bg-rose-50 border-rose-200',
 };
+
+const IN_SCAN_STATUSES = new Set(['cloning', 'scanning', 'exploiting']);
 
 function SourceCell({ repo }: { repo: Repo }) {
   const isPackage = repo.packageType !== 'git';
@@ -119,6 +128,17 @@ export default function AllRepos() {
   const [status, setStatus] = useState('');
   const [packageType, setPackageType] = useState('all');
   const [visibility, setVisibility] = useState('all');
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [bulkScanMode, setBulkScanMode] = useState<ScanMode>('both');
+  const [bulkForce, setBulkForce] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ queued: number; skipped: number } | null>(null);
+
+  const selectedIds = useMemo(
+    () => Object.keys(rowSelection).filter((id) => rowSelection[id]),
+    [rowSelection],
+  );
+
+  const hasActiveFilters = !!(search || status || packageType !== 'all' || visibility !== 'all');
 
   const { data, isLoading } = useQuery({
     queryKey: ['repos', page, search, status, packageType, visibility],
@@ -126,11 +146,42 @@ export default function AllRepos() {
     placeholderData: (prev) => prev,
   }) as { data: { data: Repo[]; total: number; totalPages: number } | undefined; isLoading: boolean };
 
-  const IN_SCAN_STATUSES = new Set(['cloning', 'scanning', 'exploiting']);
+  const { data: dbTotal } = useQuery({
+    queryKey: ['repos', 'total-all'],
+    queryFn: async () => {
+      const res = await api.getRepos({ page: 1, pageSize: 1 }) as { total: number };
+      return res.total;
+    },
+  });
 
   const rescan = useMutation({
-    mutationFn: (id: string) => api.rescanRepo(id),
+    mutationFn: (id: string) => api.rescanRepo(id, { scanMode: 'both' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['repos'] }),
+  });
+
+  const scanOptions = { scanMode: bulkScanMode, force: bulkForce };
+
+  const bulkRescan = useMutation({
+    mutationFn: (ids: string[]) => api.rescanReposBulk(ids, scanOptions),
+    onSuccess: (result) => {
+      setBulkResult(result);
+      setRowSelection({});
+      qc.invalidateQueries({ queryKey: ['repos'] });
+    },
+  });
+
+  const rescanAll = useMutation({
+    mutationFn: (useFilters: boolean) =>
+      api.rescanAllRepos({
+        ...scanOptions,
+        useFilters,
+        ...(useFilters ? { search, status, packageType, visibility } : {}),
+      }),
+    onSuccess: (result) => {
+      setBulkResult(result);
+      setRowSelection({});
+      qc.invalidateQueries({ queryKey: ['repos'] });
+    },
   });
 
   const patchVisibility = useMutation({
@@ -149,7 +200,32 @@ export default function AllRepos() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['repos'] }),
   });
 
-  const columns: ColumnDef<Repo, unknown>[] = [
+  const columns = useMemo<ColumnDef<Repo, unknown>[]>(() => [
+    {
+      id: 'select',
+      header: ({ table }) => (
+        <input
+          type="checkbox"
+          checked={table.getIsAllPageRowsSelected()}
+          ref={(el) => {
+            if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected();
+          }}
+          onChange={table.getToggleAllPageRowsSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+          title="Select all on this page"
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          onChange={row.getToggleSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+        />
+      ),
+    },
     {
       header: 'Source',
       cell: ({ row }) => <SourceCell repo={row.original} />,
@@ -180,7 +256,7 @@ export default function AllRepos() {
             loading={rescan.isPending}
             disabled={IN_SCAN_STATUSES.has(row.original.status)}
             onClick={() => rescan.mutate(row.original.id)}
-            title={IN_SCAN_STATUSES.has(row.original.status) ? 'Already queued or scanning' : 'Re-scan'}
+            title={IN_SCAN_STATUSES.has(row.original.status) ? 'Already queued or scanning' : 'Re-scan (both pipelines, revision-aware)'}
           >
             <RefreshCw className="w-3 h-3" />
           </Button>
@@ -199,7 +275,18 @@ export default function AllRepos() {
         </div>
       ),
     },
-  ];
+  ], [patchVisibility, rescan.isPending, deleteRepo]);
+
+  const scanModeLabel = SCAN_MODES.find((m) => m.value === bulkScanMode)?.label ?? bulkScanMode;
+  const filteredTotal = data?.total ?? 0;
+  const allTotal = dbTotal ?? filteredTotal;
+  const queuePending = bulkRescan.isPending || rescanAll.isPending;
+
+  const queueBulkDescription = (count: number, scope: string) =>
+    `This will enqueue up to ${count.toLocaleString()} ${scope} for ${scanModeLabel}${
+      bulkForce ? ' with force rescan' : ''
+    }. This is a heavy operation that can saturate workers and the scan queue for a long time. ` +
+    'Only pipelines not yet scanned at the current revision run unless force is enabled.';
 
   return (
     <Layout
@@ -222,7 +309,7 @@ export default function AllRepos() {
       }
     >
       <div className="space-y-4">
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-end">
           <Input
             placeholder="Search name or URL..."
             value={search}
@@ -251,13 +338,144 @@ export default function AllRepos() {
           </Select>
         </div>
 
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-md border border-border bg-muted/30">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <span className="text-sm font-semibold">Bulk scan</span>
+            <Select
+              value={bulkScanMode}
+              onChange={(e) => setBulkScanMode(e.target.value as ScanMode)}
+              className="w-36"
+            >
+              {SCAN_MODES.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </Select>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={bulkForce}
+                onChange={(e) => setBulkForce(e.target.checked)}
+                className="rounded border-border accent-primary"
+              />
+              <span>Force rescan</span>
+            </label>
+
+            {selectedIds.length > 0 && (
+              <>
+                <span className="text-sm text-muted-foreground">|</span>
+                <span className="text-sm font-medium">{selectedIds.length} selected</span>
+                <ConfirmDialog
+                  title="Queue selected repositories?"
+                  description={queueBulkDescription(selectedIds.length, 'selected repositories')}
+                  confirmText={`Queue selected (${selectedIds.length})`}
+                  onConfirm={async () => {
+                    setBulkResult(null);
+                    await bulkRescan.mutateAsync(selectedIds);
+                  }}
+                >
+                  {(open) => (
+                    <Button
+                      size="sm"
+                      loading={queuePending}
+                      disabled={queuePending}
+                      onClick={open}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Queue selected
+                    </Button>
+                  )}
+                </ConfirmDialog>
+                <Button size="sm" variant="ghost" onClick={() => setRowSelection({})}>
+                  Clear selection
+                </Button>
+              </>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {hasActiveFilters && (
+              <ConfirmDialog
+                title="Queue matching repositories?"
+                description={queueBulkDescription(filteredTotal, 'repositories matching current filters')}
+                requireTyped="QUEUE ALL"
+                confirmText={`Queue matching (${filteredTotal})`}
+                onConfirm={async () => { setBulkResult(null); await rescanAll.mutateAsync(true); }}
+              >
+                {(open) => (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    loading={queuePending}
+                    disabled={queuePending || filteredTotal === 0}
+                    onClick={open}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Queue matching ({filteredTotal})
+                  </Button>
+                )}
+              </ConfirmDialog>
+            )}
+
+            <ConfirmDialog
+              title="Queue all repositories?"
+              description={queueBulkDescription(allTotal, 'repositories in the database')}
+              requireTyped="QUEUE ALL"
+              confirmText={`Queue all (${allTotal})`}
+              onConfirm={async () => { setBulkResult(null); await rescanAll.mutateAsync(false); }}
+            >
+              {(open) => (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={queuePending}
+                  disabled={queuePending || allTotal === 0}
+                  onClick={open}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Queue all ({allTotal})
+                </Button>
+              )}
+            </ConfirmDialog>
+          </div>
+        </div>
+
+        {bulkResult && (
+          <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-4 py-3">
+            <CheckCircle className="w-4 h-4 flex-shrink-0" />
+            Queued <strong>{bulkResult.queued}</strong> for scanning.
+            {bulkResult.skipped > 0 && (
+              <> Skipped <strong>{bulkResult.skipped}</strong> (unchanged revision, in queue, or not found).</>
+            )}
+            <button
+              type="button"
+              className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setBulkResult(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {(bulkRescan.isError || rescanAll.isError) && (
+          <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-4 py-3">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            {String(bulkRescan.error ?? rescanAll.error)}
+          </div>
+        )}
+
         {isLoading ? (
           <div className="flex justify-center py-12">
             <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
           </div>
         ) : (
           <>
-            <DataTable data={data?.data ?? []} columns={columns} />
+            <DataTable
+              data={data?.data ?? []}
+              columns={columns}
+              rowSelection={rowSelection}
+              onRowSelectionChange={setRowSelection}
+              getRowId={(row) => row.id}
+            />
             <Pagination page={page} totalPages={data?.totalPages ?? 1} onPage={setPage} total={data?.total ?? 0} pageSize={20} />
           </>
         )}

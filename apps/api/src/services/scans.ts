@@ -88,6 +88,8 @@ async function queueExistingRepo(
     packageName: string | null;
     packageVersion: string | null;
     lastScannedRevision: string | null;
+    lastCveScannedRevision: string | null;
+    lastSecretScannedRevision: string | null;
   },
   force: boolean,
   scanMode: ScanMode = 'both',
@@ -117,6 +119,7 @@ async function queueExistingRepo(
 
   const gate = await evaluateRevisionGate(repo, {
     force,
+    scanMode,
     githubToken: config.GITHUB_TOKEN,
   });
   console.info(`[revision-gate] enqueue: ${gate.log}`);
@@ -264,6 +267,8 @@ export async function enqueueScans(
         packageName: true,
         packageVersion: true,
         lastScannedRevision: true,
+        lastCveScannedRevision: true,
+        lastSecretScannedRevision: true,
       },
     });
 
@@ -272,6 +277,54 @@ export async function enqueueScans(
     } else {
       results.push(await queueNewEntry(entry, scanMode));
     }
+  }
+
+  return {
+    results,
+    queued: results.filter((r) => r.action === 'queued').length,
+    skipped: results.filter((r) => r.action === 'skipped').length,
+  };
+}
+
+const repoRescanSelect = {
+  id: true,
+  url: true,
+  status: true,
+  packageType: true,
+  packageName: true,
+  packageVersion: true,
+  lastScannedRevision: true,
+  lastCveScannedRevision: true,
+  lastSecretScannedRevision: true,
+} as const;
+
+export async function enqueueRepoRescans(
+  repoIds: string[],
+  options: { force?: boolean; scanMode?: ScanMode } = {},
+): Promise<EnqueueScanResult> {
+  const force = options.force ?? false;
+  const scanMode = options.scanMode ?? 'both';
+  const results: EnqueueScanItemResult[] = [];
+  const uniqueIds = [...new Set(repoIds)];
+
+  const repos = await prisma.repo.findMany({
+    where: { id: { in: uniqueIds } },
+    select: repoRescanSelect,
+  });
+  const repoById = new Map(repos.map((r) => [r.id, r]));
+
+  for (const id of uniqueIds) {
+    const repo = repoById.get(id);
+    if (!repo) {
+      results.push({
+        url: id,
+        action: 'skipped',
+        reason: 'invalid',
+        message: 'Repo not found',
+      });
+      continue;
+    }
+    results.push(await queueExistingRepo(repo, force, scanMode));
   }
 
   return {

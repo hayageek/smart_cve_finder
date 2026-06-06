@@ -32,8 +32,11 @@ model Repo {
   privateVulnerabilityReportingEnabled Boolean?
   status         String    @default("queued")
   lastScannedAt  DateTime?
-  // Last successfully scanned git commit SHA or package version string.
+  // Last successfully scanned git commit SHA or package version string (any pipeline).
   lastScannedRevision String?
+  // Per-pipeline revision tracking — skip only the pipeline already scanned at this revision.
+  lastCveScannedRevision    String?
+  lastSecretScannedRevision String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   scanJobs       ScanJob[]

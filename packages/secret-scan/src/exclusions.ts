@@ -45,7 +45,7 @@ export function loadExclusionGlobs(): string[] {
 function exclusionMatcher(): picomatch.Matcher {
   if (!pathMatcher) {
     const globs = loadExclusionGlobs();
-    pathMatcher = picomatch(globs, { dot: true, bash: true });
+    pathMatcher = picomatch(globs, { dot: true, bash: true, nocase: true });
   }
   return pathMatcher;
 }

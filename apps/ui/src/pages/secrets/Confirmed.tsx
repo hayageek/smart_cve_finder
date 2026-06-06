@@ -9,7 +9,9 @@ import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { SeverityBadge, Badge } from '../../components/ui/Badge.tsx';
 import { Modal, ConfirmDialog } from '../../components/ui/Dialog.tsx';
+import { DeleteAllSecretsButton } from '../../components/DeleteAllSecretsButton.tsx';
 import { DeleteSameValueSecretsButton } from '../../components/DeleteSameValueSecretsButton.tsx';
+import { SecretPathDeleteButtons } from '../../components/SecretPathDeleteButtons.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { formatDate, formatFileLine, truncate } from '../../lib/utils.ts';
@@ -85,6 +87,7 @@ function SecretDetail({ secret, onClose }: { secret: ApiSecret; onClose: () => v
               onDeleted={onClose}
             />
           )}
+          <SecretPathDeleteButtons filePath={secret.path} onDeleted={onClose} />
           <ConfirmDialog
             title="Delete this finding?"
             description="Permanently delete this secret finding only?"
@@ -214,7 +217,19 @@ export default function SecretsConfirmed() {
   const handleRowClick = useCallback((row: ApiSecret) => setSelected(row), []);
 
   return (
-    <Layout title="Secrets" subtitle="Confirmed secret findings">
+    <Layout
+      title="Secrets"
+      subtitle="Confirmed secret findings"
+      actions={
+        <DeleteAllSecretsButton
+          scope="confirmed"
+          onDeleted={() => {
+            setRowSelection({});
+            setSelected(null);
+          }}
+        />
+      }
+    >
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2 items-end">
           <Input placeholder="Search repo…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="w-48" />

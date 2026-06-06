@@ -38,6 +38,20 @@ export function formatVulnIdShort(id: string, tail = 5): string {
   return id.length <= tail ? id : id.slice(-tail);
 }
 
+export function pathBasename(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const slash = normalized.lastIndexOf('/');
+  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
+/** File extension including the dot (e.g. `.json`), or null when absent. */
+export function pathExtension(filePath: string): string | null {
+  const base = pathBasename(filePath);
+  const dot = base.lastIndexOf('.');
+  if (dot < 0) return null;
+  return base.slice(dot);
+}
+
 export function formatFileLine(
   path: string,
   lineStart: number,

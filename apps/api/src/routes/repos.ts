@@ -13,7 +13,7 @@ import {
   scanTargetToEntry,
   type ParsedEntry,
 } from '../lib/repo-import.js';
-import { enqueueScans } from '../services/scans.js';
+import { enqueueRepoRescans, enqueueScans } from '../services/scans.js';
 import { emitActivityEvent } from '../sockets/index.js';
 import { evaluateRevisionGate } from '@secscan/source-revision';
 import { config } from '../config.js';
@@ -95,9 +95,13 @@ router.post('/import/manual', async (req, res) => {
     const body = z.object({
       targets: z.array(scanTargetSchema).min(1),
       scanMode: scanModeSchema.optional(),
+      force: z.boolean().optional(),
     }).parse(req.body);
-    const result = await enqueueScans(body.targets, { scanMode: body.scanMode });
-    res.json({ queued: result.queued, skipped: result.skipped });
+    const result = await enqueueScans(body.targets, {
+      scanMode: body.scanMode,
+      force: body.force,
+    });
+    res.json({ queued: result.queued, skipped: result.skipped, results: result.results });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: err.errors.map((e) => e.message).join('; ') });
@@ -121,7 +125,14 @@ router.post('/import/preview', upload.single('file'), async (req, res) => {
 router.post('/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const scanMode = scanModeSchema.parse(req.body?.scanMode ?? 'both');
+    const importBody = z.object({
+      scanMode: scanModeSchema.optional(),
+      force: z
+        .string()
+        .optional()
+        .transform((v) => v === 'true'),
+    }).parse(req.body ?? {});
+    const scanMode = importBody.scanMode ?? 'both';
     const text = req.file.buffer.toString('utf-8');
     const rows: string[][] = parse(text, { skip_empty_lines: true, trim: true, relax_column_count: true });
     const parsed = rows.map(parseCsvRow).filter(Boolean) as ParsedEntry[];
@@ -129,7 +140,10 @@ router.post('/import', upload.single('file'), async (req, res) => {
     const seen = new Set<string>();
     const unique = parsed.filter(({ url }) => seen.has(url) ? false : (seen.add(url), true));
 
-    const result = await enqueueScans(unique.map(parsedEntryToScanTarget), { scanMode });
+    const result = await enqueueScans(unique.map(parsedEntryToScanTarget), {
+      scanMode,
+      force: importBody.force,
+    });
     console.info(
       `[revision-gate] csv import: total=${unique.length} queued=${result.queued} skipped=${result.skipped}`,
     );
@@ -144,14 +158,33 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
-const querySchema = z.object({
-  page: z.coerce.number().min(1).default(1),
-  pageSize: z.coerce.number().min(1).max(100).default(20),
+const repoFilterSchema = z.object({
   search: z.string().optional(),
   status: z.string().optional(),
   provider: z.string().optional(),
   packageType: z.enum(['all', 'git', 'npm', 'pip', 'cargo', 'go', 'gem']).default('all'),
   visibility: z.enum(['public', 'private', 'all']).default('all'),
+});
+
+function buildRepoWhere(filters: z.infer<typeof repoFilterSchema>): Record<string, unknown> {
+  const where: Record<string, unknown> = {};
+  if (filters.search) {
+    where.OR = [
+      { url: { contains: filters.search, mode: 'insensitive' } },
+      { packageName: { contains: filters.search, mode: 'insensitive' } },
+    ];
+  }
+  if (filters.status) where.status = filters.status;
+  if (filters.provider) where.provider = filters.provider;
+  if (filters.packageType !== 'all') where.packageType = filters.packageType;
+  if (filters.visibility === 'public') where.isPrivate = false;
+  if (filters.visibility === 'private') where.isPrivate = true;
+  return where;
+}
+
+const querySchema = repoFilterSchema.extend({
+  page: z.coerce.number().min(1).default(1),
+  pageSize: z.coerce.number().min(1).max(100).default(20),
   sortBy: z.enum(['url', 'status', 'lastScannedAt', 'createdAt']).default('createdAt'),
   sortDir: z.enum(['asc', 'desc']).default('desc'),
 });
@@ -159,18 +192,7 @@ const querySchema = z.object({
 router.get('/', async (req, res) => {
   try {
     const q = querySchema.parse(req.query);
-    const where: Record<string, unknown> = {};
-    if (q.search) {
-      where.OR = [
-        { url: { contains: q.search, mode: 'insensitive' } },
-        { packageName: { contains: q.search, mode: 'insensitive' } },
-      ];
-    }
-    if (q.status) where.status = q.status;
-    if (q.provider) where.provider = q.provider;
-    if (q.packageType !== 'all') where.packageType = q.packageType;
-    if (q.visibility === 'public') where.isPrivate = false;
-    if (q.visibility === 'private') where.isPrivate = true;
+    const where = buildRepoWhere(q);
 
     const [repos, total] = await Promise.all([
       prisma.repo.findMany({
@@ -221,6 +243,90 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.post('/rescan', async (req, res) => {
+  try {
+    const body = z.object({
+      ids: z.array(z.string().min(1)).min(1),
+      scanMode: scanModeSchema.optional(),
+      force: z.boolean().optional(),
+    }).parse(req.body);
+
+    const result = await enqueueRepoRescans(body.ids, {
+      scanMode: body.scanMode,
+      force: body.force,
+    });
+
+    console.info(
+      `[revision-gate] bulk rescan: total=${body.ids.length} queued=${result.queued} skipped=${result.skipped}`,
+    );
+
+    res.json({
+      total: body.ids.length,
+      queued: result.queued,
+      skipped: result.skipped,
+      results: result.results,
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: err.errors.map((e) => e.message).join('; ') });
+    }
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post('/rescan-all', async (req, res) => {
+  try {
+    const body = z.object({
+      scanMode: scanModeSchema.optional(),
+      force: z.boolean().optional(),
+      /** When true, apply list filters below; otherwise queue every repo in the database. */
+      useFilters: z.boolean().optional(),
+      search: z.string().optional(),
+      status: z.string().optional(),
+      provider: z.string().optional(),
+      packageType: repoFilterSchema.shape.packageType.optional(),
+      visibility: repoFilterSchema.shape.visibility.optional(),
+    }).parse(req.body);
+
+    const where = body.useFilters
+      ? buildRepoWhere({
+          search: body.search,
+          status: body.status,
+          provider: body.provider,
+          packageType: body.packageType ?? 'all',
+          visibility: body.visibility ?? 'all',
+        })
+      : {};
+
+    const repos = await prisma.repo.findMany({
+      where,
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const result = await enqueueRepoRescans(
+      repos.map((r) => r.id),
+      { scanMode: body.scanMode, force: body.force },
+    );
+
+    console.info(
+      `[revision-gate] rescan-all: total=${repos.length} queued=${result.queued} skipped=${result.skipped} useFilters=${!!body.useFilters}`,
+    );
+
+    res.json({
+      total: repos.length,
+      queued: result.queued,
+      skipped: result.skipped,
+      results: result.results,
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: err.errors.map((e) => e.message).join('; ') });
+    }
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.patch('/:id/visibility', async (req, res) => {
   try {
     const { isPrivate } = z.object({ isPrivate: z.boolean() }).parse(req.body);
@@ -261,8 +367,10 @@ router.post('/:id/rescan', async (req, res) => {
           packageName: repo.packageName,
           packageVersion: repo.packageVersion,
           lastScannedRevision: repo.lastScannedRevision,
+          lastCveScannedRevision: repo.lastCveScannedRevision,
+          lastSecretScannedRevision: repo.lastSecretScannedRevision,
         },
-        { force: false, githubToken: config.GITHUB_TOKEN },
+        { force: false, scanMode, githubToken: config.GITHUB_TOKEN },
       );
       console.info(`[revision-gate] rescan: ${gate.log}`);
       if (gate.action === 'skip') {

@@ -51,23 +51,46 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(target),
     }),
-  importManual: (targets: Record<string, unknown>[], scanMode?: string) =>
+  importManual: (targets: Record<string, unknown>[], options?: { scanMode?: string; force?: boolean }) =>
     request<{ queued: number; skipped: number }>('/api/repos/import/manual', {
       method: 'POST',
-      body: JSON.stringify({ targets, scanMode }),
+      body: JSON.stringify({
+        targets,
+        scanMode: options?.scanMode,
+        force: options?.force,
+      }),
     }),
-  importRepos: (file: File, scanMode?: string) => {
+  importRepos: (file: File, options?: { scanMode?: string; force?: boolean }) => {
     const form = new FormData();
     form.append('file', file);
-    if (scanMode) form.append('scanMode', scanMode);
+    if (options?.scanMode) form.append('scanMode', options.scanMode);
+    if (options?.force) form.append('force', 'true');
     return fetch(`${BASE}/api/repos/import`, { method: 'POST', body: form }).then((r) => r.json());
   },
   getRepos: (params: Record<string, unknown>) =>
     request<unknown>(`/api/repos?${new URLSearchParams(params as Record<string, string>)}`),
-  rescanRepo: (id: string, scanMode?: string) =>
+  rescanRepo: (id: string, options?: { scanMode?: string; force?: boolean }) =>
     request<unknown>(`/api/repos/${id}/rescan`, {
       method: 'POST',
-      body: JSON.stringify(scanMode ? { scanMode } : {}),
+      body: JSON.stringify(options ?? {}),
+    }),
+  rescanReposBulk: (ids: string[], options?: { scanMode?: string; force?: boolean }) =>
+    request<{ total: number; queued: number; skipped: number }>('/api/repos/rescan', {
+      method: 'POST',
+      body: JSON.stringify({ ids, scanMode: options?.scanMode, force: options?.force }),
+    }),
+  rescanAllRepos: (options?: {
+    scanMode?: string;
+    force?: boolean;
+    useFilters?: boolean;
+    search?: string;
+    status?: string;
+    packageType?: string;
+    visibility?: string;
+  }) =>
+    request<{ total: number; queued: number; skipped: number }>('/api/repos/rescan-all', {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
     }),
   patchRepoVisibility: (id: string, isPrivate: boolean) =>
     request<unknown>(`/api/repos/${id}/visibility`, { method: 'PATCH', body: JSON.stringify({ isPrivate }) }),
@@ -144,6 +167,26 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify({ value }),
     }),
+  countSecretsByFilename: (filename: string) =>
+    request<{ count: number }>('/api/secrets/by-filename/count', {
+      method: 'POST',
+      body: JSON.stringify({ filename }),
+    }),
+  deleteSecretsByFilename: (filename: string) =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/by-filename', {
+      method: 'DELETE',
+      body: JSON.stringify({ filename }),
+    }),
+  countSecretsByExtension: (extension: string) =>
+    request<{ count: number }>('/api/secrets/by-extension/count', {
+      method: 'POST',
+      body: JSON.stringify({ extension }),
+    }),
+  deleteSecretsByExtension: (extension: string) =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/by-extension', {
+      method: 'DELETE',
+      body: JSON.stringify({ extension }),
+    }),
   getDroppedSecrets: (params: Record<string, unknown>) =>
     request<unknown>(`/api/secrets/dropped?${new URLSearchParams(params as Record<string, string>)}`),
   promoteDroppedSecret: (id: string) =>
@@ -153,6 +196,15 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify({ ids }),
     }),
+  clearConfirmedSecrets: () =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/confirmed', { method: 'DELETE' }),
+  clearDroppedSecrets: () =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/dropped', {
+      method: 'DELETE',
+      body: JSON.stringify({}),
+    }),
+  clearAllSecrets: () =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets', { method: 'DELETE' }),
 
   // Exploits
   getExploits: (params: Record<string, unknown>) =>

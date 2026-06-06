@@ -102,7 +102,11 @@ function PreviewList({ rows }: { rows: PreviewRow[] }) {
           )}
 
           {row.inQueue && <Badge variant="secondary" className="shrink-0 text-xs">In queue</Badge>}
-          {row.exists && !row.inQueue && <Badge variant="warning" className="shrink-0 text-xs">Exists</Badge>}
+          {row.exists && !row.inQueue && (
+            <span title="Already in database — will re-queue pending pipelines">
+              <Badge variant="warning" className="shrink-0 text-xs">In DB</Badge>
+            </span>
+          )}
         </div>
       ))}
     </div>
@@ -126,6 +130,7 @@ export default function Import() {
   const [entryVersion, setEntryVersion] = useState('');
   const [entryPrivate, setEntryPrivate] = useState(false);
   const [scanMode, setScanMode] = useState<ScanMode>('both');
+  const [forceRescan, setForceRescan] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
@@ -205,26 +210,25 @@ export default function Import() {
   };
 
   const handleImport = async () => {
-    const newManual = manualEntries.filter((e) => !e.preview.exists);
     const hasFile = !!file;
-    const fileNewCount = filePreview?.preview.filter((r) => !r.exists).length ?? 0;
-
-    if (!hasFile && newManual.length === 0) return;
+    const hasManual = manualEntries.length > 0;
+    if (!hasFile && !hasManual) return;
 
     setImporting(true);
     resetResults();
     try {
       let queued = 0;
       let skipped = 0;
+      const importOptions = { scanMode, force: forceRescan };
 
-      if (hasFile && fileNewCount > 0) {
-        const res = await api.importRepos(file!, scanMode) as { queued: number; skipped: number };
+      if (hasFile) {
+        const res = await api.importRepos(file!, importOptions) as { queued: number; skipped: number };
         queued += res.queued;
         skipped += res.skipped;
       }
 
-      if (newManual.length > 0) {
-        const res = await api.importManual(newManual.map((e) => e.target), scanMode);
+      if (hasManual) {
+        const res = await api.importManual(manualEntries.map((e) => e.target), importOptions);
         queued += res.queued;
         skipped += res.skipped;
       }
@@ -242,7 +246,9 @@ export default function Import() {
   };
 
   const newCount = combinedPreview.preview.filter((r) => !r.exists).length;
+  const existingCount = combinedPreview.duplicates;
   const hasEntries = combinedPreview.total > 0;
+  const canQueue = !!file || manualEntries.length > 0;
   const isGit = entryType === 'git';
 
   return (
@@ -251,7 +257,9 @@ export default function Import() {
 
         <Card className="p-4">
           <p className="text-sm font-semibold mb-2">Scan type</p>
-          <p className="text-xs text-muted-foreground mb-3">Choose which pipelines run for every imported target.</p>
+          <p className="text-xs text-muted-foreground mb-3">
+            Choose which pipelines run for each target. Existing repos are re-queued; only pipelines not yet scanned at the current commit/version run (unless force is enabled).
+          </p>
           <div className="flex flex-wrap gap-2">
             {SCAN_MODES.map((mode) => (
               <button
@@ -270,6 +278,20 @@ export default function Import() {
               </button>
             ))}
           </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer mt-3">
+            <input
+              type="checkbox"
+              checked={forceRescan}
+              onChange={(e) => setForceRescan(e.target.checked)}
+              className="rounded border-border"
+            />
+            <span>
+              Force rescan
+              <span className="text-xs text-muted-foreground ml-1">
+                — re-run selected pipelines even when commit/version is unchanged
+              </span>
+            </span>
+          </label>
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -404,25 +426,33 @@ export default function Import() {
         {result && (
           <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-4 py-3">
             <CheckCircle className="w-4 h-4" />
-            Queued <strong>{result.queued}</strong> entries for scanning. Skipped <strong>{result.skipped}</strong> duplicates.
+            Queued <strong>{result.queued}</strong> for scanning.
+            {result.skipped > 0 && (
+              <> Skipped <strong>{result.skipped}</strong> (unchanged revision, already in queue, or invalid).</>
+            )}
           </div>
         )}
 
         {hasEntries && !result && (
           <>
             <Card>
-              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4">
                 <div>
-                  <p className="text-sm font-semibold">{combinedPreview.total} entries found</p>
-                  {combinedPreview.duplicates > 0 && (
-                    <p className="text-xs text-amber-600">{combinedPreview.duplicates} already exist in the database</p>
-                  )}
+                  <p className="text-sm font-semibold">{combinedPreview.total} entries ready</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {newCount > 0 && <span>{newCount} new</span>}
+                    {newCount > 0 && existingCount > 0 && <span> · </span>}
+                    {existingCount > 0 && (
+                      <span className="text-amber-700">{existingCount} in database (will re-queue)</span>
+                    )}
+                    {newCount === 0 && existingCount === 0 && <span>No entries</span>}
+                  </p>
                   {manualEntries.length > 0 && (
                     <p className="text-xs text-muted-foreground">{manualEntries.length} added manually</p>
                   )}
                 </div>
-                <Button onClick={handleImport} loading={importing} disabled={importing || newCount === 0}>
-                  Import {newCount} New
+                <Button onClick={handleImport} loading={importing} disabled={importing || !canQueue}>
+                  Queue {combinedPreview.total} for scan
                 </Button>
               </div>
               <PreviewList rows={combinedPreview.preview} />

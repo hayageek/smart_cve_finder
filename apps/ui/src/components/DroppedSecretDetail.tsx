@@ -2,6 +2,7 @@ import { Modal } from './ui/Dialog.tsx';
 import { Button } from './ui/Button.tsx';
 import { Badge, SeverityBadge } from './ui/Badge.tsx';
 import { DeleteSameValueSecretsButton } from './DeleteSameValueSecretsButton.tsx';
+import { SecretPathDeleteButtons } from './SecretPathDeleteButtons.tsx';
 import { RepoUrlLink } from './RepoUrlLink.tsx';
 import { formatFileLine } from '../lib/utils.ts';
 import type { ApiSecret } from '@secscan/shared';
@@ -58,6 +59,7 @@ export function DroppedSecretDetail({
               onDeleted={onClose}
             />
           )}
+          <SecretPathDeleteButtons filePath={secret.path} onDeleted={onClose} />
         </div>
       </div>
     </Modal>

@@ -18,6 +18,32 @@ const secretQuerySchema = z.object({
   sortDir: z.enum(['asc', 'desc']).default('desc'),
 });
 
+const safeFilenameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((s) => !s.includes('/') && !s.includes('\\'), 'invalid filename');
+
+const safeExtensionSchema = z
+  .string()
+  .min(2)
+  .max(32)
+  .refine((s) => s.startsWith('.') && !s.includes('/') && !s.includes('\\'), 'invalid extension');
+
+function secretFilenameWhere(filename: string) {
+  return {
+    OR: [
+      { path: { endsWith: `/${filename}`, mode: 'insensitive' as const } },
+      { path: { equals: filename, mode: 'insensitive' as const } },
+    ],
+  };
+}
+
+function secretExtensionWhere(extension: string) {
+  const ext = extension.startsWith('.') ? extension : `.${extension}`;
+  return { path: { endsWith: ext, mode: 'insensitive' as const } };
+}
+
 const droppedQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
   pageSize: z.coerce.number().min(1).max(100).default(20),
@@ -205,6 +231,46 @@ router.delete('/by-value', async (req, res) => {
   }
 });
 
+router.post('/by-filename/count', async (req, res) => {
+  try {
+    const { filename } = z.object({ filename: safeFilenameSchema }).parse(req.body);
+    const count = await prisma.secret.count({ where: secretFilenameWhere(filename) });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.delete('/by-filename', async (req, res) => {
+  try {
+    const { filename } = z.object({ filename: safeFilenameSchema }).parse(req.body);
+    const { count } = await prisma.secret.deleteMany({ where: secretFilenameWhere(filename) });
+    res.json({ ok: true, deleted: count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.post('/by-extension/count', async (req, res) => {
+  try {
+    const { extension } = z.object({ extension: safeExtensionSchema }).parse(req.body);
+    const count = await prisma.secret.count({ where: secretExtensionWhere(extension) });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.delete('/by-extension', async (req, res) => {
+  try {
+    const { extension } = z.object({ extension: safeExtensionSchema }).parse(req.body);
+    const { count } = await prisma.secret.deleteMany({ where: secretExtensionWhere(extension) });
+    res.json({ ok: true, deleted: count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const row = await prisma.secret.findUnique({
@@ -239,6 +305,15 @@ router.post('/dropped/:id/promote', async (req, res) => {
       data: { dropped: false, dropReason: null, dropEvidence: null },
     });
     res.json({ ok: true, id: updated.id });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.delete('/confirmed', async (_req, res) => {
+  try {
+    const { count } = await prisma.secret.deleteMany({ where: { dropped: false } });
+    res.json({ ok: true, deleted: count });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

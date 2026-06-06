@@ -202,6 +202,9 @@ async function main(): Promise<void> {
   process.stdout.write(`\n${'═'.repeat(60)}\n`);
   process.stdout.write(`Gitleaks raw hits   : ${gate.gitleaksRawCount}\n`);
   process.stdout.write(`Path exclusions     : ${gate.excludedCount}\n`);
+  if (gate.malformedFilteredCount) {
+    process.stdout.write(`Malformed shape     : ${gate.malformedFilteredCount}\n`);
+  }
   if (gate.severityFilteredCount) {
     process.stdout.write(`Below min severity  : ${gate.severityFilteredCount} (min=${minSeverity})\n`);
   }

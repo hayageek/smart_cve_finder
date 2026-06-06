@@ -9,6 +9,7 @@ import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { Badge, SeverityBadge } from '../../components/ui/Badge.tsx';
 import { ConfirmDialog } from '../../components/ui/Dialog.tsx';
+import { DeleteAllSecretsButton } from '../../components/DeleteAllSecretsButton.tsx';
 import { DroppedSecretDetail } from '../../components/DroppedSecretDetail.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
@@ -153,7 +154,19 @@ export default function SecretsDropped() {
   const handleRowClick = useCallback((row: ApiSecret) => setSelected(row), []);
 
   return (
-    <Layout title="Dropped Secrets" subtitle="False positives and inactive credentials">
+    <Layout
+      title="Dropped Secrets"
+      subtitle="False positives and inactive credentials"
+      actions={
+        <DeleteAllSecretsButton
+          scope="dropped"
+          onDeleted={() => {
+            setRowSelection({});
+            setSelected(null);
+          }}
+        />
+      }
+    >
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2 items-end">
           <Input placeholder="Search repo…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="w-48" />
