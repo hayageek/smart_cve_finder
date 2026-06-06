@@ -36,11 +36,11 @@ export async function runTrufflehogVerify(opts: RunTrufflehogOptions): Promise<T
     throw new Error(`trufflehog not found at "${bin}" — install from https://github.com/trufflesecurity/trufflehog`);
   }
 
+  // TruffleHog v3+ verifies by default; use --no-verification to disable.
   const args = [
     'filesystem',
     opts.cwd,
     '--json',
-    '--verify',
     '--no-update',
   ];
 

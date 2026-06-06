@@ -1,6 +1,7 @@
 import { Modal } from './ui/Dialog.tsx';
 import { Button } from './ui/Button.tsx';
 import { Badge, SeverityBadge } from './ui/Badge.tsx';
+import { DeleteSameValueSecretsButton } from './DeleteSameValueSecretsButton.tsx';
 import { RepoUrlLink } from './RepoUrlLink.tsx';
 import { formatFileLine } from '../lib/utils.ts';
 import type { ApiSecret } from '@secscan/shared';
@@ -32,8 +33,8 @@ export function DroppedSecretDetail({
           <p className="font-mono text-xs">{formatFileLine(secret.path, secret.lineStart, secret.lineEnd)}</p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Redacted preview</p>
-          <p className="font-mono text-xs">{secret.redactedValue ?? '—'}</p>
+          <p className="text-xs text-muted-foreground">Secret value</p>
+          <p className="font-mono text-xs break-all select-all">{secret.redactedValue ?? '—'}</p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Repo</p>
@@ -45,11 +46,19 @@ export function DroppedSecretDetail({
             <p className="text-muted-foreground">{secret.dropEvidence}</p>
           </div>
         )}
-        {onPromote && (
-          <Button size="sm" loading={promoteLoading} onClick={onPromote}>
-            Promote to confirmed
-          </Button>
-        )}
+        <div className="flex flex-wrap gap-2 pt-2">
+          {onPromote && (
+            <Button size="sm" loading={promoteLoading} onClick={onPromote}>
+              Promote to confirmed
+            </Button>
+          )}
+          {secret.redactedValue && (
+            <DeleteSameValueSecretsButton
+              value={secret.redactedValue}
+              onDeleted={onClose}
+            />
+          )}
+        </div>
       </div>
     </Modal>
   );

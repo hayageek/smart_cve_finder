@@ -12,12 +12,11 @@
     "secret-scan": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && node -e \"const fs=require('fs');fs.cpSync('gitleaks.toml','dist/gitleaks.toml')\"",
+    "build": "tsc && node -e \"const fs=require('fs');fs.cpSync('gitleaks.toml','dist/gitleaks.toml');fs.cpSync('src/exclusions.yml','dist/exclusions.yml')\"",
     "dev": "tsc --watch",
     "cli": "node dist/cli.js"
   },
   "dependencies": {
-    "@secscan/cve-semgrep": "*",
     "@secscan/shared": "*",
     "picomatch": "^4.0.4"
   },

@@ -41,6 +41,12 @@ const schema = z.object({
   CVE_SEMGREP_JOBS: z.coerce.number().optional(),
   SECRET_GITLEAKS_BIN: z.string().default('gitleaks'),
   SECRET_TRUFFLEHOG_BIN: z.string().default('trufflehog'),
+  /** Minimum secret severity to keep (CRITICAL/HIGH/MEDIUM/LOW). Set MEDIUM to drop LOW-only hits. */
+  SECRET_MIN_SEVERITY: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).default('MEDIUM'),
+  /** When true, skip the Cursor triage skill — gitleaks + TruffleHog only. Unverified hits are kept as findings. */
+  SECRET_GATE_ONLY: z.string().transform((v) => v === 'true').default('false'),
+  /** When true, mask secret values in DB and gitleaks report. Default false (full values stored). */
+  SECRET_REDACT: z.string().transform((v) => v === 'true').default('false'),
   SCANNER_CONCURRENCY: z.coerce.number().default(3),
   SCANNER_MAX_ATTEMPTS: z.coerce.number().default(2),
   SCANNER_BACKOFF_DELAY_MS: z.coerce.number().default(10000),

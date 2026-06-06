@@ -9,9 +9,10 @@ import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { SeverityBadge, Badge } from '../../components/ui/Badge.tsx';
 import { Modal, ConfirmDialog } from '../../components/ui/Dialog.tsx';
+import { DeleteSameValueSecretsButton } from '../../components/DeleteSameValueSecretsButton.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
-import { formatDate, formatFileLine } from '../../lib/utils.ts';
+import { formatDate, formatFileLine, truncate } from '../../lib/utils.ts';
 import type { ApiSecret } from '@secscan/shared';
 
 const VERIFY_STATUSES = ['verified', 'unverified', 'dead'] as const;
@@ -56,8 +57,8 @@ function SecretDetail({ secret, onClose }: { secret: ApiSecret; onClose: () => v
           <p className="font-mono text-xs">{formatFileLine(secret.path, secret.lineStart, secret.lineEnd)}</p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Redacted value</p>
-          <p className="font-mono text-xs">{secret.redactedValue ?? '—'}</p>
+          <p className="text-xs text-muted-foreground">Secret value</p>
+          <p className="font-mono text-xs break-all select-all">{secret.redactedValue ?? '—'}</p>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Repo</p>
@@ -69,7 +70,7 @@ function SecretDetail({ secret, onClose }: { secret: ApiSecret; onClose: () => v
             <p>{secret.message}</p>
           </div>
         )}
-        <div className="flex gap-2 pt-2">
+        <div className="flex flex-wrap gap-2 pt-2">
           <Button
             size="sm"
             variant={secret.isFalsePositive ? 'secondary' : 'outline'}
@@ -78,9 +79,24 @@ function SecretDetail({ secret, onClose }: { secret: ApiSecret; onClose: () => v
           >
             {secret.isFalsePositive ? 'Unmark FP' : 'Mark False Positive'}
           </Button>
-          <Button size="sm" variant="destructive" loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>
-            Delete
-          </Button>
+          {secret.redactedValue && (
+            <DeleteSameValueSecretsButton
+              value={secret.redactedValue}
+              onDeleted={onClose}
+            />
+          )}
+          <ConfirmDialog
+            title="Delete this finding?"
+            description="Permanently delete this secret finding only?"
+            confirmText="Delete"
+            onConfirm={async () => { await deleteMutation.mutateAsync(); }}
+          >
+            {(open) => (
+              <Button size="sm" variant="outline" loading={deleteMutation.isPending} onClick={open}>
+                Delete this one
+              </Button>
+            )}
+          </ConfirmDialog>
         </div>
       </div>
     </Modal>
@@ -123,10 +139,34 @@ export default function SecretsConfirmed() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['secrets'] });
       setRowSelection({});
+      setSelected(null);
     },
   });
 
   const columns = useMemo<ColumnDef<ApiSecret>[]>(() => [
+    {
+      id: 'select',
+      header: ({ table }) => (
+        <input
+          type="checkbox"
+          checked={table.getIsAllPageRowsSelected()}
+          ref={(el) => { if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected(); }}
+          onChange={table.getToggleAllPageRowsSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+          title="Select all on this page"
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          onChange={row.getToggleSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+        />
+      ),
+    },
     {
       accessorKey: 'severity',
       header: 'Severity',
@@ -153,8 +193,11 @@ export default function SecretsConfirmed() {
     },
     {
       accessorKey: 'redactedValue',
-      header: 'Preview',
-      cell: ({ row }) => <span className="font-mono text-xs">{row.original.redactedValue ?? '—'}</span>,
+      header: 'Secret value',
+      cell: ({ row }) => {
+        const v = row.original.redactedValue;
+        return <span className="font-mono text-xs">{v ? truncate(v, 15) : '—'}</span>;
+      },
     },
     {
       accessorKey: 'repoUrl',

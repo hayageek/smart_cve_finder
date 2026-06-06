@@ -1,9 +1,9 @@
-# Path and file exclusions for the CVE hunter — aligned with
-# cve-pattern-hunter/reference-cwe-taxonomy.md §3. Scopes scanning to first-party
-# application code (tests, examples, docs, fixtures, migrations are excluded).
+# Path and file exclusions for the SECRET scanner.
 #
-# The secret scanner uses its OWN, narrower list (packages/secret-scan/src/exclusions.yml)
-# that keeps those locations in scope, since leaked credentials often hide there.
+# Unlike the CVE hunter (packages/cve-semgrep/src/exclusions.yml), this list only
+# strips dependency, build-output, and generated/binary noise. Tests, examples,
+# docs, markdown, and migrations are deliberately KEPT IN SCOPE because leaked
+# credentials disproportionately hide in exactly those locations.
 #
 # Ripgrep -g globs; ! prefix excludes paths from search.
 
@@ -35,37 +35,8 @@ path_globs:
   - "!**/conan-cache/**"
   - "!**/vcpkg_installed/**"
   - "!**/.ccache/**"
-  - "!**/test/**"
-  - "!**/tests/**"
-  - "!**/spec/**"
-  - "!**/specs/**"
-  - "!**/__tests__/**"
-  - "!**/__mocks__/**"
-  - "!**/__fixtures__/**"
-  - "!**/test_data/**"
-  - "!**/testdata/**"
-  - "!**/fixtures/**"
-  - "!**/example/**"
-  - "!**/examples/**"
-  - "!**/sample/**"
-  - "!**/samples/**"
-  - "!**/demo/**"
-  - "!**/demos/**"
-  - "!**/benchmark/**"
-  - "!**/benchmarks/**"
-  - "!**/doc/**"
-  - "!**/docs/**"
-  - "!**/documentation/**"
-  - "!**/migrations/**"
-  - "!**/db/migrate/**"
-  - "!**/storybook/**"
-  - "!**/.storybook/**"
 
 file_globs:
-  - "!**/*.md"
-  - "!**/*.markdown"
-  - "!**/*.rst"
-  - "!**/*.txt"
   - "!**/*.lock"
   - "!**/*.min.js"
   - "!**/*.min.css"
@@ -91,8 +62,3 @@ file_globs:
   - "!**/*.so"
   - "!**/*.dylib"
   - "!**/*.dll"
-  - "!**/*_test.*"
-  - "!**/*.test.*"
-  - "!**/*.spec.*"
-  - "!**/test_*.*"
-  - "!**/conftest.py"

@@ -1,4 +1,6 @@
-import type { Severity } from '@secscan/shared';
+import { readFileSync, existsSync } from 'fs';
+import path from 'path';
+import { SEVERITY_ORDER, type Severity } from '@secscan/shared';
 import type { GitleaksMatch, SecretCandidate, SecretScanGateResult, SecretScanOptions, VerifyStatus } from './types.js';
 import { runGitleaksScan, normalizeScanPath } from './gitleaks.js';
 import { findTrufflehogMatch, runTrufflehogVerify } from './trufflehog.js';
@@ -46,14 +48,71 @@ function verifyStatusFromTrufflehog(th?: { verified: boolean }): VerifyStatus {
   return th.verified ? 'verified' : 'dead';
 }
 
+function passesMinSeverity(severity: Severity, minSeverity?: Severity): boolean {
+  if (!minSeverity || minSeverity === 'LOW') return true;
+  return (SEVERITY_ORDER[severity] ?? 0) >= (SEVERITY_ORDER[minSeverity] ?? 0);
+}
+
+function isRedactedPlaceholder(value: string): boolean {
+  const v = value.trim();
+  if (!v || v === 'REDACTED') return true;
+  if (/^\*+$/.test(v)) return true;
+  // Our redactSecret() output or similar partial masks
+  if (/\*{4,}/.test(v)) return true;
+  return false;
+}
+
+/** Read the matched substring from the scanned file (gitleaks columns are 1-based). */
+function readSecretFromSource(cwd: string, gl: GitleaksMatch): string | undefined {
+  try {
+    const absPath = path.isAbsolute(gl.File) ? gl.File : path.join(cwd, gl.File);
+    if (!existsSync(absPath)) return undefined;
+    const lines = readFileSync(absPath, 'utf8').split(/\r?\n/);
+    const startIdx = gl.StartLine - 1;
+    if (startIdx < 0 || startIdx >= lines.length) return undefined;
+
+    if (gl.StartColumn && gl.EndColumn && gl.EndColumn > gl.StartColumn) {
+      const slice = lines[startIdx].slice(gl.StartColumn - 1, gl.EndColumn);
+      if (slice.trim()) return slice;
+    }
+
+    const endIdx = (gl.EndLine ?? gl.StartLine) - 1;
+    if (endIdx > startIdx && endIdx < lines.length) {
+      const block = lines.slice(startIdx, endIdx + 1).join('\n');
+      if (block.trim()) return block;
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSecretValue(cwd: string, gl: GitleaksMatch, redactForStorage: boolean): string {
+  const fromReport = (gl.Secret || gl.Match || '').trim();
+  let full = fromReport;
+
+  if (isRedactedPlaceholder(fromReport)) {
+    const fromSource = readSecretFromSource(cwd, gl);
+    if (fromSource?.trim()) full = fromSource.trim();
+  }
+
+  if (!full && !isRedactedPlaceholder(fromReport)) {
+    full = fromReport;
+  }
+
+  return redactForStorage ? redactSecret(full) : full;
+}
+
 function toCandidate(
   cwd: string,
   gl: GitleaksMatch,
   verifyStatus: VerifyStatus,
   detectorName?: string,
+  redactForStorage = false,
 ): SecretCandidate {
   const relPath = normalizeScanPath(cwd, gl.File);
-  const redacted = redactSecret(gl.Secret || gl.Match);
+  const secretValue = resolveSecretValue(cwd, gl, redactForStorage);
   return {
     ruleId: gl.RuleID,
     description: gl.Description,
@@ -61,7 +120,7 @@ function toCandidate(
     lineStart: gl.StartLine,
     lineEnd: gl.EndLine || gl.StartLine,
     secretType: gl.RuleID,
-    redactedValue: redacted,
+    redactedValue: secretValue,
     entropy: gl.Entropy,
     verifyStatus,
     detectorName,
@@ -83,6 +142,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
       gitleaksBin: opts.gitleaksBin,
       configPath: opts.configPath,
       noGit: opts.noGit,
+      redact: opts.redactSecrets === true,
       log: opts.log,
     });
   } catch (err) {
@@ -136,12 +196,24 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     log?.warn(`[secret-scan] trufflehog unavailable — candidates stay unverified: ${trufflehogError}`);
   }
 
-  const candidates: SecretCandidate[] = gitleaksMatches.map((gl) => {
+  let candidates: SecretCandidate[] = gitleaksMatches.map((gl) => {
     const relPath = normalizeScanPath(opts.cwd, gl.File);
     const th = findTrufflehogMatch(trufflehogMatches, relPath, gl.StartLine);
     const status = verifyStatusFromTrufflehog(th);
-    return toCandidate(opts.cwd, gl, status, th?.detectorName);
+    return toCandidate(opts.cwd, gl, status, th?.detectorName, opts.redactSecrets);
   });
+
+  let severityFilteredCount = 0;
+  if (opts.minSeverity && opts.minSeverity !== 'LOW') {
+    const before = candidates.length;
+    candidates = candidates.filter((c) => passesMinSeverity(c.severity, opts.minSeverity));
+    severityFilteredCount = before - candidates.length;
+    if (severityFilteredCount > 0) {
+      log?.info(
+        `[secret-scan] severity filter (>= ${opts.minSeverity}) removed ${severityFilteredCount} candidate(s)`,
+      );
+    }
+  }
 
   const verified = candidates.filter((c) => c.verifyStatus === 'verified').length;
   const dead = candidates.filter((c) => c.verifyStatus === 'dead').length;
@@ -158,6 +230,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     excludedCount,
     trufflehogCount: trufflehogMatches.length,
     trufflehogError,
+    severityFilteredCount,
   };
 }
 

@@ -185,6 +185,26 @@ router.get('/dropped', async (req, res) => {
   }
 });
 
+router.post('/by-value/count', async (req, res) => {
+  try {
+    const { value } = z.object({ value: z.string().min(1) }).parse(req.body);
+    const count = await prisma.secret.count({ where: { redactedValue: value } });
+    res.json({ count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+router.delete('/by-value', async (req, res) => {
+  try {
+    const { value } = z.object({ value: z.string().min(1) }).parse(req.body);
+    const { count } = await prisma.secret.deleteMany({ where: { redactedValue: value } });
+    res.json({ ok: true, deleted: count });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const row = await prisma.secret.findUnique({

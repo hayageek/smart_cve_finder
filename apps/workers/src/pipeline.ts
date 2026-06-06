@@ -24,7 +24,7 @@ import {
   type VulnerabilityFinding,
 } from '@secscan/shared';
 import { runSemgrepScan } from '@secscan/cve-semgrep';
-import { runSecretScanGate, type SecretCandidate } from '@secscan/secret-scan';
+import { runSecretScanGate, redactSecret, type SecretCandidate } from '@secscan/secret-scan';
 import { runCursorSkill } from './cursor-runner.js';
 import type { RunSkillOptions } from './cursor-runner.js';
 
@@ -885,6 +885,12 @@ export interface SecretScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model'
   trufflehogBin?: string;
   /** Scan filesystem only (no git history). Default true for registry packages. */
   noGit?: boolean;
+  /** Drop candidates below this severity (e.g. MEDIUM excludes LOW). */
+  minSeverity?: Severity;
+  /** Skip the Cursor triage skill; keep unverified candidates as findings. */
+  gateOnly?: boolean;
+  /** When true, mask secret values in stored findings. */
+  redactSecrets?: boolean;
 }
 
 export interface SecretScanResult {
@@ -952,6 +958,8 @@ export async function runSecretScan(
     gitleaksBin: opts.gitleaksBin,
     trufflehogBin: opts.trufflehogBin,
     noGit: opts.noGit,
+    minSeverity: opts.minSeverity,
+    redactSecrets: opts.redactSecrets,
     log: scanLog,
   });
 
@@ -1020,7 +1028,14 @@ export async function runSecretScan(
   let triageDrops: DroppedSecretFinding[] = [];
   let rawOutput = EMPTY_SECRET_SCAN_OUTPUT;
 
-  if (forTriage.length > 0) {
+  // Gate-only mode: skip Cursor entirely. Unverified candidates are reported
+  // as-is (verify_status stays "unverified") instead of being AI-triaged.
+  if (opts.gateOnly && forTriage.length > 0) {
+    log.info(
+      `[secret-scan] gate-only mode — skipping triage skill, keeping ${forTriage.length} unverified candidate(s) as findings`,
+    );
+    triageFindings = forTriage.map((c, idx) => candidateToFinding(c, confirmed.length + idx));
+  } else if (forTriage.length > 0) {
     const sample = forTriage
       .slice(0, 3)
       .map((c) => `${c.path}:${c.lineStart} (${c.ruleId}/${c.verifyStatus})`)
@@ -1038,7 +1053,7 @@ export async function runSecretScan(
           line: c.lineStart,
           line_end: c.lineEnd,
           secret_type: c.secretType,
-          redacted_value: c.redactedValue,
+          redacted_value: redactSecret(c.redactedValue),
           verify_status: c.verifyStatus,
           description: c.description,
           severity: c.severity,

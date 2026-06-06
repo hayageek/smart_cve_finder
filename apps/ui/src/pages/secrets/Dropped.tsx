@@ -77,6 +77,29 @@ export default function SecretsDropped() {
 
   const columns = useMemo<ColumnDef<ApiSecret>[]>(() => [
     {
+      id: 'select',
+      header: ({ table }) => (
+        <input
+          type="checkbox"
+          checked={table.getIsAllPageRowsSelected()}
+          ref={(el) => { if (el) el.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected(); }}
+          onChange={table.getToggleAllPageRowsSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+          title="Select all on this page"
+        />
+      ),
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          onChange={row.getToggleSelectedHandler()}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 cursor-pointer accent-primary"
+        />
+      ),
+    },
+    {
       accessorKey: 'dropReason',
       header: 'Drop reason',
       cell: ({ row }) => <Badge variant="outline">{row.original.dropReason ?? '—'}</Badge>,

@@ -134,6 +134,16 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify({ ids }),
     }),
+  countSecretsByValue: (value: string) =>
+    request<{ count: number }>('/api/secrets/by-value/count', {
+      method: 'POST',
+      body: JSON.stringify({ value }),
+    }),
+  deleteSecretsByValue: (value: string) =>
+    request<{ ok: boolean; deleted: number }>('/api/secrets/by-value', {
+      method: 'DELETE',
+      body: JSON.stringify({ value }),
+    }),
   getDroppedSecrets: (params: Record<string, unknown>) =>
     request<unknown>(`/api/secrets/dropped?${new URLSearchParams(params as Record<string, string>)}`),
   promoteDroppedSecret: (id: string) =>

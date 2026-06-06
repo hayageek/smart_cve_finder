@@ -46,6 +46,10 @@ export interface SecretScanOptions {
   configPath?: string;
   /** When false, skip git history and scan filesystem only (default for packages). */
   noGit?: boolean;
+  /** Drop candidates below this severity (e.g. MEDIUM excludes LOW). Default: no filter. */
+  minSeverity?: Severity;
+  /** When true, mask secret values in stored findings (default: store full value). */
+  redactSecrets?: boolean;
   log?: SecretScanLogger;
 }
 
@@ -63,5 +67,7 @@ export interface SecretScanGateResult {
   excludedCount: number;
   trufflehogCount: number;
   trufflehogError?: string;
+  /** Candidates removed because severity was below minSeverity. */
+  severityFilteredCount?: number;
   skippedReason?: string;
 }

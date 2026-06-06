@@ -36,6 +36,8 @@ export interface RunGitleaksOptions {
   gitleaksBin?: string;
   configPath?: string;
   noGit?: boolean;
+  /** When true, gitleaks masks secrets in the report (default: false — full values in report). */
+  redact?: boolean;
   log?: { info: (msg: string) => void; warn: (msg: string) => void };
 }
 
@@ -71,6 +73,8 @@ export async function runGitleaksScan(opts: RunGitleaksOptions): Promise<Gitleak
   if (opts.noGit !== false) {
     args.push('--no-git');
   }
+  // Explicitly disable gitleaks report redaction unless requested (default is redacted stdout).
+  args.push('--redact', opts.redact ? '100' : '0');
 
   const cmd = formatExecCommand(bin, args);
   log?.info(`[gitleaks] exec: ${cmd}`);

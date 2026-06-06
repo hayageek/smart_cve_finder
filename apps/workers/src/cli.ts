@@ -106,7 +106,7 @@ const command = argv[0];
 // Find the first positional argument after the command (skip flags and their values).
 const VALUE_FLAGS = new Set(['--type','--source','--version','--model','--fast','--api-key',
   '--workspace','--skills-url','--skills-dir','--reports-dir','--min-severity',
-  '--gitleaks-bin','--trufflehog-bin']);
+  '--gitleaks-bin','--trufflehog-bin','--secret-min-severity']);
 
 function parseFastFlag(raw: string | undefined): boolean {
   if (raw === undefined) return process.env.CURSOR_AGENT_MODEL_FAST === 'true';
@@ -153,10 +153,13 @@ const opts = {
   logsDir:      resolveFromRoot(process.env.LOGS_DIR    ?? './data/logs'),
   keep:         hasFlag('--keep'),
   noExploit:    hasFlag('--no-exploit'),
-  gateOnly:     hasFlag('--gate-only'),
+  gateOnly:     hasFlag('--gate-only') || process.env.SECRET_GATE_ONLY === 'true',
   debug:        hasFlag('--debug') || process.env.DEBUG_CURSOR === 'true',
   gitleaksBin:  getFlag('--gitleaks-bin') ?? process.env.SECRET_GITLEAKS_BIN ?? 'gitleaks',
   trufflehogBin: getFlag('--trufflehog-bin') ?? process.env.SECRET_TRUFFLEHOG_BIN ?? 'trufflehog',
+  secretMinSeverity: (getFlag('--secret-min-severity') ?? process.env.SECRET_MIN_SEVERITY ?? 'MEDIUM') as
+    'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW',
+  redactSecrets: process.env.SECRET_REDACT === 'true',
 };
 
 // ── API key guard ─────────────────────────────────────────────────
@@ -510,6 +513,8 @@ async function runSecrets() {
       cwd: workspacePath,
       gitleaksBin: opts.gitleaksBin,
       trufflehogBin: opts.trufflehogBin,
+      minSeverity: opts.secretMinSeverity,
+      redactSecrets: opts.redactSecrets,
       noGit: localDir ? hasFlag('--no-git') : opts.type !== 'git',
       log: { info: (msg) => plog.info(msg), warn: (msg) => plog.warn(msg) },
     });
@@ -528,6 +533,9 @@ async function runSecrets() {
     log.raw(`${C.bold} GATE SUMMARY${C.reset}`);
     log.raw(`  Gitleaks raw      : ${gate.gitleaksRawCount}`);
     log.raw(`  Excluded by path  : ${gate.excludedCount}`);
+    if (gate.severityFilteredCount) {
+      log.raw(`  Below min severity: ${gate.severityFilteredCount} (min=${opts.secretMinSeverity})`);
+    }
     log.raw(`  Candidates        : ${gate.candidates.length}`);
     log.raw(`  Verified          : ${C.green}${verified.length}${C.reset}`);
     log.raw(`  Unverified        : ${C.yellow}${unverified.length}${C.reset}`);
@@ -567,6 +575,9 @@ async function runSecrets() {
         onChunk: (chunk) => process.stdout.write(chunk),
         gitleaksBin: opts.gitleaksBin,
         trufflehogBin: opts.trufflehogBin,
+        minSeverity: opts.secretMinSeverity,
+        redactSecrets: opts.redactSecrets,
+        gateOnly: opts.gateOnly,
         noGit: localDir ? hasFlag('--no-git') : opts.type !== 'git',
       },
       plog,
@@ -910,10 +921,11 @@ Scan options:
   --keep                       Keep workspace on disk
 
 Secrets options:
-  --gate-only                  Gitleaks + TruffleHog only (no Cursor triage skill)
+  --gate-only                  Gitleaks + TruffleHog only (no Cursor triage skill; env: SECRET_GATE_ONLY)
   --no-git                     Filesystem scan only (default for local dirs unless git repo)
   --gitleaks-bin <path>        Gitleaks binary (env: SECRET_GITLEAKS_BIN)
   --trufflehog-bin <path>      TruffleHog binary (env: SECRET_TRUFFLEHOG_BIN)
+  --secret-min-severity <lvl>  Min severity to keep: CRITICAL|HIGH|MEDIUM|LOW (env: SECRET_MIN_SEVERITY)
   --type / --version           Same as scan (for remote URLs/packages)
   --keep                       Keep downloaded workspace (remote targets only)
 

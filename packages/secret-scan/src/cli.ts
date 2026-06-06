@@ -12,6 +12,7 @@
  *   --trufflehog-bin <path> TruffleHog binary (default: trufflehog)
  *   --config <path>        Gitleaks config (default: bundled gitleaks.toml)
  *   --no-git               Filesystem only (no git history)
+ *   --min-severity <level> Minimum severity to keep: CRITICAL|HIGH|MEDIUM|LOW (env: SECRET_MIN_SEVERITY)
  *   -h, --help             Show help
  */
 
@@ -25,6 +26,7 @@ interface CliOptions {
   gitleaksBin?: string;
   trufflehogBin?: string;
   configPath?: string;
+  minSeverity?: import('@secscan/shared').Severity;
   noGit: boolean;
   help: boolean;
 }
@@ -41,6 +43,7 @@ Options:
   --gitleaks-bin <path>   Gitleaks binary (default: gitleaks)
   --trufflehog-bin <path> TruffleHog binary (default: trufflehog)
   --config <path>         Gitleaks config (default: bundled gitleaks.toml)
+  --min-severity <level>  Minimum severity to keep: CRITICAL|HIGH|MEDIUM|LOW (env: SECRET_MIN_SEVERITY)
   --no-git                Filesystem only (no git history)
   -h, --help              Show help
 
@@ -87,6 +90,10 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === '--config') {
       opts.configPath = argv[++i];
+      continue;
+    }
+    if (arg === '--min-severity') {
+      opts.minSeverity = argv[++i] as CliOptions['minSeverity'];
       continue;
     }
     if (arg.startsWith('-')) {
@@ -155,6 +162,10 @@ async function main(): Promise<void> {
   }
 
   const cwd = path.resolve(opts.directory);
+  const minSeverity = opts.minSeverity
+    ?? (process.env.SECRET_MIN_SEVERITY as CliOptions['minSeverity'] | undefined)
+    ?? 'MEDIUM';
+  const redactSecrets = process.env.SECRET_REDACT === 'true';
   const log = {
     info: (msg: string) => process.stderr.write(`${msg}\n`),
     warn: (msg: string) => process.stderr.write(`WARN ${msg}\n`),
@@ -168,6 +179,8 @@ async function main(): Promise<void> {
     gitleaksBin: opts.gitleaksBin,
     trufflehogBin: opts.trufflehogBin,
     configPath: opts.configPath,
+    minSeverity,
+    redactSecrets,
     noGit: opts.noGit,
     log,
   });
@@ -189,6 +202,9 @@ async function main(): Promise<void> {
   process.stdout.write(`\n${'═'.repeat(60)}\n`);
   process.stdout.write(`Gitleaks raw hits   : ${gate.gitleaksRawCount}\n`);
   process.stdout.write(`Path exclusions     : ${gate.excludedCount}\n`);
+  if (gate.severityFilteredCount) {
+    process.stdout.write(`Below min severity  : ${gate.severityFilteredCount} (min=${minSeverity})\n`);
+  }
   process.stdout.write(`Gitleaks candidates : ${gate.gitleaksCount}\n`);
   process.stdout.write(`TruffleHog matches  : ${gate.trufflehogCount}\n`);
   if (gate.trufflehogError) {
