@@ -145,6 +145,7 @@ export const api = {
     }),
 
   // Secrets
+  getSecretRuleStats: () => request<import('@secscan/shared').ApiSecretRuleStats>('/api/secrets/by-rule'),
   getSecrets: (params: Record<string, unknown>) =>
     request<unknown>(`/api/secrets?${new URLSearchParams(params as Record<string, string>)}`),
   getSecret: (id: string) => request<unknown>(`/api/secrets/${id}`),

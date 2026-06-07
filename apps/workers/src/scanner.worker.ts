@@ -32,6 +32,7 @@ import {
   storedRevisionsFromRepo,
 } from '@secscan/source-revision';
 import { simpleGit } from 'simple-git';
+import { isInvalidSecretShape } from '@secscan/secret-scan';
 
 const prisma = new PrismaClient();
 const log = createWorkerLogger('scanner');
@@ -112,6 +113,12 @@ function metadataFromDroppedSecret(d: DroppedSecretFinding): object {
     secret_type: d.extra?.metadata?.secret_type ?? d.rule_id,
     verify_status: d.extra?.metadata?.verify_status ?? 'unverified',
   };
+}
+
+/** Skip polluted gitleaks captures (`;`, `\`, leading `.`, path `/` fragments, etc.). */
+function isPersistableSecret(redactedValue: string | null | undefined): boolean {
+  if (!redactedValue?.trim()) return false;
+  return !isInvalidSecretShape(redactedValue);
 }
 
 function resolveScanMode(mode?: ScanMode): ScanMode {
@@ -586,9 +593,26 @@ export const scanWorker = new Worker<ScanJobData>(
           )
         : [];
 
+      const persistableFindings = runSecrets
+        ? secretFindings.filter((f) => isPersistableSecret(f.extra.metadata.redacted_value))
+        : [];
+      const persistableDrops = runSecrets
+        ? secretDrops.filter((d) => isPersistableSecret(String(d.extra?.metadata?.redacted_value ?? '')))
+        : [];
+      if (runSecrets && persistableFindings.length < secretFindings.length) {
+        jobLog.info(
+          `secret shape filter skipped ${secretFindings.length - persistableFindings.length} confirmed secret(s)`,
+        );
+      }
+      if (runSecrets && persistableDrops.length < secretDrops.length) {
+        jobLog.info(
+          `secret shape filter skipped ${secretDrops.length - persistableDrops.length} dropped secret(s)`,
+        );
+      }
+
       const secrets = runSecrets
         ? await Promise.all(
-            secretFindings.map((f) =>
+            persistableFindings.map((f) =>
               prisma.secret.create({
                 data: {
                   id: uuidv7(),
@@ -614,7 +638,7 @@ export const scanWorker = new Worker<ScanJobData>(
 
       const droppedSecrets = runSecrets
         ? await Promise.all(
-            secretDrops.map((d) =>
+            persistableDrops.map((d) =>
               prisma.secret.create({
                 data: {
                   id: uuidv7(),

@@ -10,6 +10,7 @@ const Confirmed = lazy(() => import('./pages/vulnerabilities/Confirmed.tsx'));
 const Dropped = lazy(() => import('./pages/vulnerabilities/Dropped.tsx'));
 const SecretsConfirmed = lazy(() => import('./pages/secrets/Confirmed.tsx'));
 const SecretsDropped = lazy(() => import('./pages/secrets/Dropped.tsx'));
+const SecretsByRule = lazy(() => import('./pages/secrets/ByRule.tsx'));
 const Exploits = lazy(() => import('./pages/Exploits.tsx'));
 const Workers = lazy(() => import('./pages/Workers.tsx'));
 const Settings = lazy(() => import('./pages/Settings.tsx'));
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/scans/history" element={<ScanHistory />} />
         <Route path="/vulns/confirmed" element={<Confirmed />} />
         <Route path="/vulns/dropped" element={<Dropped />} />
+        <Route path="/secrets/by-rule" element={<SecretsByRule />} />
         <Route path="/secrets/confirmed" element={<SecretsConfirmed />} />
         <Route path="/secrets/dropped" element={<SecretsDropped />} />
         <Route path="/exploits" element={<Exploits />} />

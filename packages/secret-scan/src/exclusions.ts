@@ -50,10 +50,18 @@ function exclusionMatcher(): picomatch.Matcher {
   return pathMatcher;
 }
 
-/** True when `filePath` matches a secret-scan exclusions.yml glob. */
+/** Any path segment containing "test" (e.g. fstest/, testserver/, FooTest.java). */
+const TEST_KEYWORD_IN_SEGMENT = /test/i;
+
+function pathSegmentContainsTestKeyword(filePath: string): boolean {
+  return filePath.split('/').some((segment) => segment.length > 0 && TEST_KEYWORD_IN_SEGMENT.test(segment));
+}
+
+/** True when `filePath` matches a secret-scan exclusions.yml glob or a test-keyword segment. */
 export function isExcludedPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/');
   if (!normalized) return false;
+  if (pathSegmentContainsTestKeyword(normalized)) return true;
   return exclusionMatcher()(normalized);
 }
 

@@ -1346,13 +1346,6 @@ keywords = ["sk-"]
 
 
 [[rules]]
-id = "together-ai-api-key"
-description = "Together AI API key"
-regex = '''[a-f0-9]{32}'''
-keywords = ["together"]
-
-
-[[rules]]
 id = "deepseek-api-key"
 description = "DeepSeek API key"
 regex = '''sk-[a-f0-9]{48}'''

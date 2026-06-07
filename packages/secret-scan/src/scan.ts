@@ -183,7 +183,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
   if (malformedFilteredCount > 0) {
     log?.info(
       `[secret-scan] malformed secret shape removed ${malformedFilteredCount} gitleaks hit(s) ` +
-        '(value contained {, }, [, ], ", \', or &)',
+        '(value contained structural chars or a multi-segment path)',
     );
   }
 

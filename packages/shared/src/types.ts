@@ -266,6 +266,16 @@ export interface ApiScanJob {
   exploitCount: number;
 }
 
+export interface ApiSecretRuleCount {
+  ruleId: string;
+  count: number;
+}
+
+export interface ApiSecretRuleStats {
+  confirmed: ApiSecretRuleCount[];
+  dropped: ApiSecretRuleCount[];
+}
+
 export interface ApiSecret {
   id: string;
   scanJobId: string;

@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
 import { Trash2 } from 'lucide-react';
@@ -30,11 +31,17 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 
 export default function SecretsDropped() {
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [dropReason, setDropReason] = useState('');
   const [severity, setSeverity] = useState('');
-  const [ruleId, setRuleId] = useState('');
+  const [ruleId, setRuleId] = useState(() => searchParams.get('ruleId') ?? '');
+
+  useEffect(() => {
+    setRuleId(searchParams.get('ruleId') ?? '');
+    setPage(1);
+  }, [searchParams]);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<ApiSecret | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});

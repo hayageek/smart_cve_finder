@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { type ColumnDef, type RowSelectionState } from '@tanstack/react-table';
 import { Trash2 } from 'lucide-react';
@@ -108,11 +109,17 @@ function SecretDetail({ secret, onClose }: { secret: ApiSecret; onClose: () => v
 
 export default function SecretsConfirmed() {
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [severity, setSeverity] = useState('');
   const [verifyStatus, setVerifyStatus] = useState('');
-  const [ruleId, setRuleId] = useState('');
+  const [ruleId, setRuleId] = useState(() => searchParams.get('ruleId') ?? '');
+
+  useEffect(() => {
+    setRuleId(searchParams.get('ruleId') ?? '');
+    setPage(1);
+  }, [searchParams]);
   const [fpFilter, setFpFilter] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<ApiSecret | null>(null);

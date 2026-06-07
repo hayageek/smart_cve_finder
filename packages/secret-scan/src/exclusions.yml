@@ -5,6 +5,9 @@
 # trees, static assets, and documentation markup. Migrations remain in scope.
 #
 # Ripgrep -g globs; ! prefix excludes paths from search.
+#
+# Additionally, exclusions.ts excludes any path whose segment contains "test"
+# (case-insensitive): fstest/, testserver/, FooTest.java, etc.
 
 path_globs:
   - "!**/node_modules/**"
@@ -93,6 +96,13 @@ file_globs:
   - "!**/*.rest"
   - "!**/*.postman_collection.json"
   - "!**/*.insomnia.json"
+  - "!**/*.oas.json"
+  - "!**/*.openapi.json"
+  - "!**/*-openapi.json"
+  - "!**/*.wsdl"
+  # Public X.509 certificates (not private keys — those usually live in .pem/.key)
+  - "!**/*.crt"
+  - "!**/*.cer"
   - "!**/.env.example"
   - "!**/.env.sample"
   - "!**/.env.template"

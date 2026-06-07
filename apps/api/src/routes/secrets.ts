@@ -211,6 +211,35 @@ router.get('/dropped', async (req, res) => {
   }
 });
 
+router.get('/by-rule', async (_req, res) => {
+  try {
+    const [confirmedGroups, droppedGroups] = await Promise.all([
+      prisma.secret.groupBy({
+        by: ['ruleId'],
+        where: { dropped: false },
+        _count: { _all: true },
+      }),
+      prisma.secret.groupBy({
+        by: ['ruleId'],
+        where: { dropped: true },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const mapGroups = (groups: { ruleId: string; _count: { _all: number } }[]) =>
+      groups
+        .map((g) => ({ ruleId: g.ruleId, count: g._count._all }))
+        .sort((a, b) => b.count - a.count || a.ruleId.localeCompare(b.ruleId));
+
+    res.json({
+      confirmed: mapGroups(confirmedGroups),
+      dropped: mapGroups(droppedGroups),
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.post('/by-value/count', async (req, res) => {
   try {
     const { value } = z.object({ value: z.string().min(1) }).parse(req.body);

@@ -43,6 +43,7 @@ const nav: NavItem[] = [
     label: 'Secrets',
     icon: KeyRound,
     children: [
+      { label: 'By Rule', to: '/secrets/by-rule' },
       { label: 'Confirmed', to: '/secrets/confirmed' },
       { label: 'Dropped', to: '/secrets/dropped' },
     ],
