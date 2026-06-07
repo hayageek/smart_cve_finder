@@ -14,7 +14,7 @@ import { DeleteAllSecretsButton } from '../../components/DeleteAllSecretsButton.
 import { DroppedSecretDetail } from '../../components/DroppedSecretDetail.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
-import { formatDate, formatFileLine } from '../../lib/utils.ts';
+import { formatDate, formatFileLine, formatFileLineBasename } from '../../lib/utils.ts';
 import type { ApiSecret } from '@secscan/shared';
 
 const DROP_REASONS = [
@@ -44,6 +44,7 @@ export default function SecretsDropped() {
   }, [searchParams]);
   const [repoSearch, setRepoSearch] = useState('');
   const [valueSearch, setValueSearch] = useState('');
+  const [pathSearch, setPathSearch] = useState('');
   const [selected, setSelected] = useState<ApiSecret | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
@@ -53,13 +54,14 @@ export default function SecretsDropped() {
   );
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dropped-secrets', page, pageSize, dropReason, severity, ruleId, repoSearch, valueSearch],
+    queryKey: ['dropped-secrets', page, pageSize, dropReason, severity, ruleId, repoSearch, valueSearch, pathSearch],
     queryFn: () => api.getDroppedSecrets({
       page,
       pageSize,
       dropReason,
       ...(repoSearch ? { repoUrl: repoSearch } : {}),
       ...(valueSearch ? { value: valueSearch } : {}),
+      ...(pathSearch ? { path: pathSearch } : {}),
       ...(severity ? { severity } : {}),
       ...(ruleId ? { ruleId } : {}),
     }),
@@ -128,8 +130,11 @@ export default function SecretsDropped() {
       accessorKey: 'path',
       header: 'Location',
       cell: ({ row }) => (
-        <span className="font-mono text-xs truncate max-w-[180px] block">
-          {formatFileLine(row.original.path, row.original.lineStart, row.original.lineEnd)}
+        <span
+          className="font-mono text-xs truncate max-w-[180px] block"
+          title={formatFileLine(row.original.path, row.original.lineStart, row.original.lineEnd)}
+        >
+          {formatFileLineBasename(row.original.path, row.original.lineStart, row.original.lineEnd)}
         </span>
       ),
     },
@@ -180,6 +185,7 @@ export default function SecretsDropped() {
         <div className="flex flex-wrap gap-2 items-end">
           <Input placeholder="Search repo…" value={repoSearch} onChange={(e) => { setRepoSearch(e.target.value); setPage(1); }} className="w-48" />
           <Input placeholder="Search value…" value={valueSearch} onChange={(e) => { setValueSearch(e.target.value); setPage(1); }} className="w-48" />
+          <Input placeholder="Search location…" value={pathSearch} onChange={(e) => { setPathSearch(e.target.value); setPage(1); }} className="w-48" />
           <Select value={dropReason} onChange={(e) => { setDropReason(e.target.value); setPage(1); }} className="w-44">
             <option value="">All drop reasons</option>
             {DROP_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}

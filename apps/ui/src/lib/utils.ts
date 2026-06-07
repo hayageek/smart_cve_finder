@@ -62,6 +62,16 @@ export function formatFileLine(
   return truncate(full, maxLen);
 }
 
+/** Table-friendly location: filename only (full path belongs in detail views). */
+export function formatFileLineBasename(
+  path: string,
+  lineStart: number,
+  lineEnd?: number | null,
+): string {
+  const file = pathBasename(path);
+  return lineEnd != null ? `${file}:${lineStart}–${lineEnd}` : `${file}:${lineStart}`;
+}
+
 export function repoShortName(url: string): string {
   try {
     const u = new URL(url);

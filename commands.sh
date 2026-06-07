@@ -47,3 +47,10 @@ npm run cli -w apps/workers -- secrets https://github.com/org/repo --gate-only -
 
 
 npm run bugbounty-repos -- -o bugbounty-active-repos.csv
+
+# Cap results per ecosystem
+npm run top-packages -- --recent --since-hours 1 -n 100 -o recent.csv
+# Only npm (skip go if you don't need it)
+npm run top-packages -- --recent --since-hours 1 --ecosystems npm -n 200
+# Lower rate-limit delay (riskier — may hit 429s)
+npm run top-packages -- --recent --libraries-io-delay-ms 800

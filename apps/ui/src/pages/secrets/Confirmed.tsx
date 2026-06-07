@@ -15,7 +15,7 @@ import { DeleteSameValueSecretsButton } from '../../components/DeleteSameValueSe
 import { SecretPathDeleteButtons } from '../../components/SecretPathDeleteButtons.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
-import { formatDate, formatFileLine, truncate } from '../../lib/utils.ts';
+import { formatDate, formatFileLine, formatFileLineBasename, truncate } from '../../lib/utils.ts';
 import type { ApiSecret } from '@secscan/shared';
 
 const VERIFY_STATUSES = ['verified', 'unverified', 'dead'] as const;
@@ -123,6 +123,7 @@ export default function SecretsConfirmed() {
   const [fpFilter, setFpFilter] = useState('');
   const [repoSearch, setRepoSearch] = useState('');
   const [valueSearch, setValueSearch] = useState('');
+  const [pathSearch, setPathSearch] = useState('');
   const [selected, setSelected] = useState<ApiSecret | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
@@ -132,12 +133,13 @@ export default function SecretsConfirmed() {
   );
 
   const { data, isLoading } = useQuery({
-    queryKey: ['secrets', page, pageSize, severity, verifyStatus, ruleId, fpFilter, repoSearch, valueSearch],
+    queryKey: ['secrets', page, pageSize, severity, verifyStatus, ruleId, fpFilter, repoSearch, valueSearch, pathSearch],
     queryFn: () => api.getSecrets({
       page,
       pageSize,
       ...(repoSearch ? { repoUrl: repoSearch } : {}),
       ...(valueSearch ? { value: valueSearch } : {}),
+      ...(pathSearch ? { path: pathSearch } : {}),
       ...(severity ? { severity } : {}),
       ...(verifyStatus ? { verifyStatus } : {}),
       ...(ruleId ? { ruleId } : {}),
@@ -198,8 +200,11 @@ export default function SecretsConfirmed() {
       accessorKey: 'path',
       header: 'Location',
       cell: ({ row }) => (
-        <span className="font-mono text-xs truncate max-w-[200px] block">
-          {formatFileLine(row.original.path, row.original.lineStart, row.original.lineEnd)}
+        <span
+          className="font-mono text-xs truncate max-w-[200px] block"
+          title={formatFileLine(row.original.path, row.original.lineStart, row.original.lineEnd)}
+        >
+          {formatFileLineBasename(row.original.path, row.original.lineStart, row.original.lineEnd)}
         </span>
       ),
     },
@@ -243,6 +248,7 @@ export default function SecretsConfirmed() {
         <div className="flex flex-wrap gap-2 items-end">
           <Input placeholder="Search repo…" value={repoSearch} onChange={(e) => { setRepoSearch(e.target.value); setPage(1); }} className="w-48" />
           <Input placeholder="Search value…" value={valueSearch} onChange={(e) => { setValueSearch(e.target.value); setPage(1); }} className="w-48" />
+          <Input placeholder="Search location…" value={pathSearch} onChange={(e) => { setPathSearch(e.target.value); setPage(1); }} className="w-48" />
           <Select value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }} className="w-36">
             <option value="">All severities</option>
             {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}

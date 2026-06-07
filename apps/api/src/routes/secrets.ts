@@ -13,6 +13,7 @@ const secretQuerySchema = z.object({
   verifyStatus: z.string().optional(),
   repoUrl: z.string().optional(),
   value: z.string().optional(),
+  path: z.string().optional(),
   falsePositive: z.enum(['yes', 'no']).optional(),
   dropped: z.enum(['yes', 'no', 'all']).default('no'),
   sortBy: z.enum(['severity', 'createdAt', 'verifyStatus']).default('createdAt'),
@@ -54,6 +55,7 @@ const droppedQuerySchema = z.object({
   verifyStatus: z.string().optional(),
   repoUrl: z.string().optional(),
   value: z.string().optional(),
+  path: z.string().optional(),
 });
 
 function secretValueWhere(value: string) {
@@ -154,6 +156,7 @@ router.get('/', async (req, res) => {
       where.scanJob = { repo: { url: { contains: q.repoUrl, mode: 'insensitive' } } };
     }
     if (q.value) Object.assign(where, secretValueWhere(q.value));
+    if (q.path) where.path = { contains: q.path, mode: 'insensitive' };
 
     const orderBy =
       q.sortBy === 'severity'
@@ -195,6 +198,7 @@ router.get('/dropped', async (req, res) => {
       where.scanJob = { repo: { url: { contains: q.repoUrl, mode: 'insensitive' } } };
     }
     if (q.value) Object.assign(where, secretValueWhere(q.value));
+    if (q.path) where.path = { contains: q.path, mode: 'insensitive' };
 
     const [rows, total] = await Promise.all([
       prisma.secret.findMany({

@@ -78,6 +78,8 @@ async function resolveGitHubUrlForScan(
 /**
  * For GitHub repos (including registry packages whose upstream is on GitHub): fetch stars/forks/PVR,
  * persist on Repo, and apply SCAN_MIN_STARS / SCAN_REQUIRE_PVR.
+ * When SCAN_MIN_STARS > 0, scans are skipped if stars are below the threshold or unknown
+ * (e.g. invalid/missing GITHUB_TOKEN).
  */
 export async function applyGitHubScanGates(
   prisma: PrismaClient,
@@ -131,10 +133,18 @@ export async function applyGitHubScanGates(
   const requirePvr = config.SCAN_REQUIRE_PVR;
   const starCount = snapshot.githubStars;
 
-  if (minStars > 0 && typeof starCount === 'number' && starCount < minStars) {
-    const message = `Repository has ${starCount} stars (minimum ${minStars}) - skipping vulnerability scan`;
-    jobLog.info({ ghUrl, starCount, minStars }, message);
-    return { skip: true, reason: 'below-min-stars', message };
+  if (minStars > 0) {
+    if (starCount === null) {
+      const message =
+        `Could not determine GitHub star count (check GITHUB_TOKEN / API access) — skipping scan (SCAN_MIN_STARS=${minStars})`;
+      jobLog.warn({ ghUrl, minStars }, message);
+      return { skip: true, reason: 'stars-unknown', message };
+    }
+    if (starCount < minStars) {
+      const message = `Repository has ${starCount} stars (minimum ${minStars}) - skipping scan`;
+      jobLog.info({ ghUrl, starCount, minStars }, message);
+      return { skip: true, reason: 'below-min-stars', message };
+    }
   }
 
   if (
@@ -142,7 +152,7 @@ export async function applyGitHubScanGates(
     snapshot.privateVulnerabilityReportingEnabled === false
   ) {
     const message =
-      'Private vulnerability reporting is not enabled for this repository - skipping vulnerability scan';
+      'Private vulnerability reporting is not enabled for this repository - skipping scan';
     jobLog.info({ ghUrl }, message);
     return { skip: true, reason: 'pvr-disabled', message };
   }
