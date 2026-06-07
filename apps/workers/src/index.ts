@@ -15,10 +15,11 @@ logger.info({ pid: process.pid }, 'Worker process');
 logger.info(
   {
     scanMinStars: config.SCAN_MIN_STARS,
+    scanMaxInactiveYears: config.SCAN_MAX_INACTIVE_YEARS,
     scanRequirePvr: config.SCAN_REQUIRE_PVR,
     githubTokenSet: Boolean(config.GITHUB_TOKEN?.trim()),
   },
-  'Scan gates: min stars (0=off), require PVR',
+  'Scan gates: min stars (0=off), max inactive years (0=off), require PVR',
 );
 
 scanWorker.on('ready', () => logger.info('Scan queue worker ready'));

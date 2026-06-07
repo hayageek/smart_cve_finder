@@ -10,3 +10,4 @@ volumes/logs/
 .DS_Store
 data/
 skills/
+.env

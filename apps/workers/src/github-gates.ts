@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import {
   fetchGitHubRepoSnapshot,
   githubUrlFromRepo,
+  isRepoInactiveByPushedAt,
   type GitHubRepoSnapshot,
 } from '@secscan/shared';
 import type { RegistryPackageType } from '@secscan/shared';
@@ -77,9 +78,11 @@ async function resolveGitHubUrlForScan(
 
 /**
  * For GitHub repos (including registry packages whose upstream is on GitHub): fetch stars/forks/PVR,
- * persist on Repo, and apply SCAN_MIN_STARS / SCAN_REQUIRE_PVR.
+ * persist on Repo, and apply SCAN_MIN_STARS / SCAN_MAX_INACTIVE_YEARS / SCAN_REQUIRE_PVR.
  * When SCAN_MIN_STARS > 0, scans are skipped if stars are below the threshold or unknown
  * (e.g. invalid/missing GITHUB_TOKEN).
+ * When SCAN_MAX_INACTIVE_YEARS > 0, scans are skipped if the last GitHub push is older than
+ * that window (no commits in the last N years).
  */
 export async function applyGitHubScanGates(
   prisma: PrismaClient,
@@ -130,8 +133,26 @@ export async function applyGitHubScanGates(
   }
 
   const minStars = config.SCAN_MIN_STARS;
+  const maxInactiveYears = config.SCAN_MAX_INACTIVE_YEARS;
   const requirePvr = config.SCAN_REQUIRE_PVR;
   const starCount = snapshot.githubStars;
+
+  if (maxInactiveYears > 0) {
+    const inactive = isRepoInactiveByPushedAt(snapshot.pushedAt, maxInactiveYears);
+    if (inactive === true) {
+      const lastPush = snapshot.pushedAt ?? 'unknown';
+      const message =
+        `Repository has had no commits in the last ${maxInactiveYears} years (last push: ${lastPush}) — skipping scan`;
+      jobLog.info({ ghUrl, pushedAt: snapshot.pushedAt, maxInactiveYears }, message);
+      return { skip: true, reason: 'inactive-repo', message };
+    }
+    if (inactive === null) {
+      jobLog.warn(
+        { ghUrl, maxInactiveYears },
+        'Could not determine last push date — proceeding with scan (fail-open)',
+      );
+    }
+  }
 
   if (minStars > 0) {
     if (starCount === null) {

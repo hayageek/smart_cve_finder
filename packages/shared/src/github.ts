@@ -238,9 +238,31 @@ export interface GitHubRepoSnapshot {
   githubStars: number | null;
   githubForks: number | null;
   privateVulnerabilityReportingEnabled: boolean | null;
+  /** ISO 8601 timestamp of the last push to the default branch (from GitHub API). */
+  pushedAt: string | null;
 }
 
-/** Fetch stars/forks and PVR for a GitHub repo URL. */
+/**
+ * Whether a repo has had no commits within the last `maxInactiveYears`.
+ * Returns null when the last-push date is unknown (caller should fail-open).
+ */
+export function isRepoInactiveByPushedAt(
+  pushedAt: string | null | undefined,
+  maxInactiveYears: number,
+  now: Date = new Date(),
+): boolean | null {
+  if (maxInactiveYears <= 0) return false;
+  if (!pushedAt) return null;
+
+  const pushed = new Date(pushedAt);
+  if (Number.isNaN(pushed.getTime())) return null;
+
+  const cutoff = new Date(now);
+  cutoff.setFullYear(cutoff.getFullYear() - maxInactiveYears);
+  return pushed < cutoff;
+}
+
+/** Fetch stars/forks, last push, and PVR for a GitHub repo URL. */
 export async function fetchGitHubRepoSnapshot(
   repoUrl: string,
   token?: string,
@@ -254,5 +276,6 @@ export async function fetchGitHubRepoSnapshot(
     githubStars: meta?.stars ?? null,
     githubForks: meta?.forks ?? null,
     privateVulnerabilityReportingEnabled: pvr.ok ? pvr.enabled : null,
+    pushedAt: meta?.pushedAt ?? null,
   };
 }

@@ -64,6 +64,8 @@ const schema = z.object({
   GITHUB_TOKEN: z.string().optional(),
   /** Minimum GitHub stars to run a scan; 0 disables the check. */
   SCAN_MIN_STARS: z.coerce.number().default(100),
+  /** Skip GitHub repos with no commits in this many years (0 = disabled). */
+  SCAN_MAX_INACTIVE_YEARS: z.coerce.number().default(2),
   /** When true, skip GitHub repos without private vulnerability reporting enabled. */
   SCAN_REQUIRE_PVR: z.string().transform((v) => v === 'true').default('false'),
 });
