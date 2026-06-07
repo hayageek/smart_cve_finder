@@ -230,6 +230,8 @@ export const api = {
   exploitDrain: () => request<unknown>('/api/workers/exploit/drain', { method: 'POST' }),
   clearQueue: (name: string) =>
     request<unknown>(`/api/workers/queues/${name}/clear`, { method: 'POST' }),
+  resetAllWorkerQueues: () =>
+    request<unknown>('/api/workers/queues/reset-all', { method: 'POST' }),
   getWorkerLogs: (tail = 500) =>
     request<{ lines: Array<{ timestamp: string; level: string; worker: string; message: string; jobId?: string }>; total: number }>(`/api/workers/logs?tail=${tail}`),
   downloadWorkerLogs: () => requestBlob('/api/workers/logs/download'),

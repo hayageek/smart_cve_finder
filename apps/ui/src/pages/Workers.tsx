@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Play, Pause, Square, Download, Trash, Zap, Maximize2, Minimize2 } from 'lucide-react';
+import { Play, Pause, Square, Download, Trash, Zap, Maximize2, Minimize2, RotateCcw } from 'lucide-react';
 import { Layout } from '../components/Layout.tsx';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card.tsx';
 import { Button } from '../components/ui/Button.tsx';
@@ -136,6 +136,21 @@ export default function Workers() {
   const exploitPause = useMutation({ mutationFn: () => api.exploitPause(), onSuccess: () => refetchQueue() });
   const exploitResume = useMutation({ mutationFn: () => api.exploitResume(), onSuccess: () => refetchQueue() });
   const exploitDrain = useMutation({ mutationFn: () => api.exploitDrain(), onSuccess: () => refetchQueue() });
+  const resetAllQueues = useMutation({
+    mutationFn: () => api.resetAllWorkerQueues(),
+    onSuccess: () => {
+      qc.setQueryData(['worker-queue-stats'], (prev: typeof queueData) =>
+        prev
+          ? {
+              ...prev,
+              stats: prev.stats.map((s) => ({ ...s, waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 })),
+              pipeline: { inProgress: 0, done: 0, failed: 0 },
+            }
+          : prev,
+      );
+      refetchQueue();
+    },
+  });
 
   const stats = liveQueueStats.length > 0 ? liveQueueStats : queueData?.stats ?? [];
   const paused = queueData?.paused ?? { scanner: false, exploit: false };
@@ -202,6 +217,34 @@ export default function Workers() {
             onDrain={() => exploitDrain.mutate()}
           />
         </div>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
+            <div>
+              <CardTitle>Reset queue statistics</CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Clear scanner and exploit Redis queues and delete scan job history so every counter on this page returns to zero.
+              </p>
+            </div>
+            <ConfirmDialog
+              title="Reset all queues"
+              description={
+                'This permanently clears both worker queues (waiting, active, completed, and failed counts) ' +
+                'and deletes all scan job records so pipeline counters reset to zero. Repos stuck mid-scan are set back to queued. ' +
+                'Vulnerabilities and secrets tied to deleted scan jobs are removed. Running worker jobs may error; restart workers if needed. This cannot be undone.'
+              }
+              confirmText="Reset all queues"
+              requireTyped="RESET"
+              onConfirm={async () => { await resetAllQueues.mutateAsync(); }}
+            >
+              {(open) => (
+                <Button size="sm" variant="destructive" onClick={open} loading={resetAllQueues.isPending}>
+                  <RotateCcw className="w-3.5 h-3.5" /> Reset queues
+                </Button>
+              )}
+            </ConfirmDialog>
+          </CardHeader>
+        </Card>
 
         <Card>
           <CardHeader>

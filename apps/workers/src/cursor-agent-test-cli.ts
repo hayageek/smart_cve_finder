@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 /**
- * Minimal CLI to test @cursor/sdk Agent.create with Composer 2.5 tier params.
+ * Minimal CLI to test @cursor/sdk Agent.create.
  *
  * Usage (from repo root):
  *   npm run cursor-test -w apps/workers
  *   npm run cursor-test -w apps/workers -- --list-models
- *   npm run cursor-test -w apps/workers -- --fast false --prompt "Reply with exactly: ok"
- *   npm run cursor-test -w apps/workers -- --fast true --cwd /path/to/repo
+ *   npm run cursor-test -w apps/workers -- --model composer-2.5 --prompt "Reply with exactly: ok"
+ *   npm run cursor-test -w apps/workers -- --cwd /path/to/repo
  *
  * Options:
  *   --model <id>       Model id (default: CURSOR_AGENT_MODEL or composer-2.5)
- *   --fast <true|false>  Composer 2.5 tier (default: CURSOR_AGENT_MODEL_FAST or false)
  *   --cwd <dir>        local.cwd (default: repo root)
  *   --prompt <text>    Prompt sent via agent.send (default: short echo test)
  *   --api-key <key>    CURSOR_API_KEY override
@@ -24,7 +23,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Agent, Cursor } from '@cursor/sdk';
-import { buildModelSelection, resolveModelFast } from './cursor-runner.js';
+import { buildModelSelection } from './cursor-runner.js';
 
 setMaxListeners(100);
 
@@ -43,19 +42,8 @@ function hasFlag(name: string): boolean {
   return argv.includes(name);
 }
 
-function parseFastFlag(raw: string | undefined): boolean | undefined {
-  if (raw === undefined) return false;
-  const v = raw.toLowerCase();
-  if (v === 'true' || v === '1' || v === 'yes') return true;
-  if (v === 'false' || v === '0' || v === 'no') return false;
-  throw new Error(`Invalid --fast value "${raw}" (use true or false)`);
-}
-
 const apiKey = getFlag('--api-key') ?? process.env.CURSOR_API_KEY;
 const modelId = getFlag('--model') ?? process.env.CURSOR_AGENT_MODEL ?? 'composer-2.5';
-const fast = hasFlag('--fast')
-  ? parseFastFlag(getFlag('--fast'))
-  : resolveModelFast();
 const cwd = path.resolve(getFlag('--cwd') ?? repoRoot);
 const prompt =
   getFlag('--prompt') ??
@@ -105,7 +93,7 @@ async function cmdRun(): Promise<void> {
     die(`cwd does not exist: ${cwd}`);
   }
 
-  const model = buildModelSelection(modelId, fast);
+  const model = buildModelSelection(modelId);
   printHeader(model);
 
   const t0 = Date.now();
@@ -163,16 +151,14 @@ async function cmdRun(): Promise<void> {
 
 function printHelp(): void {
   console.log(`
-cursor-agent-test — exercise Agent.create with Composer fast tier param
+cursor-agent-test — exercise Agent.create with @cursor/sdk
 
   npm run cursor-test -w apps/workers
   npm run cursor-test -w apps/workers -- --list-models
-  npm run cursor-test -w apps/workers -- --fast false
-  npm run cursor-test -w apps/workers -- --fast true --prompt "Say hello"
+  npm run cursor-test -w apps/workers -- --model composer-2.5 --prompt "Say hello"
 
 Options:
   --model <id>         Default: CURSOR_AGENT_MODEL or composer-2.5
-  --fast <true|false>  Composer 2.5 tier (env: CURSOR_AGENT_MODEL_FAST, default: false)
   --cwd <dir>          local.cwd (default: repo root)
   --prompt <text>      agent.send prompt
   --api-key <key>      Override CURSOR_API_KEY

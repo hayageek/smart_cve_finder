@@ -45,11 +45,6 @@ export interface RunSkillOptions {
   /** Cursor model ID, e.g. "claude-sonnet-4-5" or "composer-2.5". */
   model: string;
   /**
-   * Composer 2.5 fast tier. false = standard (cheaper billing).
-   * Defaults to CURSOR_AGENT_MODEL_FAST env (false when unset).
-   */
-  modelFast?: boolean;
-  /**
    * Cursor API key. Falls back to CURSOR_API_KEY env var when omitted.
    * Get yours at https://cursor.com/settings
    */
@@ -103,23 +98,16 @@ function createDbg(onDebug?: (message: string) => void) {
 
 // ── Model selection ─────────────────────────────────────────────────
 
-/** True when env/options request Composer fast tier (standard = false). */
-export function resolveModelFast(explicit?: boolean): boolean {
-  return explicit ?? process.env.CURSOR_AGENT_MODEL_FAST === 'true';
-}
-
 /**
- * Build SDK model selection. Composer models get an explicit `fast` param so
- * we do not rely on the API default variant (fast=true → cursor-2.5-fast billing).
+ * Build SDK model selection. Composer models use standard tier (fast=false) so
+ * we do not rely on the API default variant (fast=true → higher billing).
  */
-export function buildModelSelection(modelId: string, modelFast?: boolean): ModelSelection {
+export function buildModelSelection(modelId: string): ModelSelection {
   if (!modelId.toLowerCase().includes('composer')) {
     return { id: modelId };
   }
-  const fast = resolveModelFast(modelFast);
   return {
-    id: modelId,
-    params: [{ id: 'fast', value: fast ? 'true' : 'false' }],
+    id: modelId
   };
 }
 
@@ -127,7 +115,7 @@ export function buildModelSelection(modelId: string, modelFast?: boolean): Model
 
 export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkillResult> {
   const { skillPath, promptSuffix, cwd, model, onChunk } = options;
-  const modelSelection = buildModelSelection(model, options.modelFast);
+  const modelSelection = buildModelSelection(model);
   const debug = options.debug ?? process.env.DEBUG_CURSOR === 'true';
   const DBG = createDbg(options.onDebug);
 
@@ -188,9 +176,7 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
   try {
     // Log the exact prompt sent to the agent → pino file + stdout + Redis live stream.
     if (options.onDebug) {
-      options.onDebug(
-        `model=${model} fast=${modelSelection.params?.find((p) => p.id === 'fast')?.value ?? 'n/a'} cwd=${cwd}`,
-      );
+      options.onDebug(`model=${model} cwd=${cwd}`);
       options.onDebug(`agent.send prompt (${prompt.length} chars):\n${prompt}`);
     }
 

@@ -784,7 +784,7 @@ export const EMPTY_CVE_SCAN_OUTPUT =
   '<<<CVE_HUNTER_FINDINGS_JSON>>>\n[]\n<<<END_CVE_HUNTER_FINDINGS_JSON>>>\n' +
   '<<<CVE_HUNTER_DROPS_JSON>>>\n[]\n<<<END_CVE_HUNTER_DROPS_JSON>>>';
 
-export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'modelFast' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
   /** Run the Semgrep candidate scan before the agent (default: true). */
   semgrepEnabled?: boolean;
   /** Semgrep binary (default: semgrep). */
@@ -859,7 +859,6 @@ export async function runCveScan(
     promptSuffix: candidateJson,
     cwd:       opts.cwd,
     model:     opts.model,
-    modelFast: opts.modelFast,
     apiKey:    opts.apiKey,
     debug:     opts.debug,
     onChunk:   opts.onChunk,
@@ -880,7 +879,7 @@ export const EMPTY_SECRET_SCAN_OUTPUT =
   '<<<SECRET_FINDINGS_JSON>>>\n[]\n<<<END_SECRET_FINDINGS_JSON>>>\n' +
   '<<<SECRET_DROPS_JSON>>>\n[]\n<<<END_SECRET_DROPS_JSON>>>';
 
-export interface SecretScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'modelFast' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface SecretScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
   gitleaksBin?: string;
   trufflehogBin?: string;
   /** Scan filesystem only (no git history). Default true for registry packages. */
@@ -891,6 +890,8 @@ export interface SecretScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model'
   gateOnly?: boolean;
   /** When true, mask secret values in stored findings. */
   redactSecrets?: boolean;
+  /** Skip when gitleaks raw hits exceed this count (test/fixture noise). */
+  maxGitleaksRawHits?: number;
 }
 
 export interface SecretScanResult {
@@ -960,6 +961,7 @@ export async function runSecretScan(
     noGit: opts.noGit,
     minSeverity: opts.minSeverity,
     redactSecrets: opts.redactSecrets,
+    maxGitleaksRawHits: opts.maxGitleaksRawHits,
     log: scanLog,
   });
 
@@ -1079,7 +1081,6 @@ export async function runSecretScan(
       promptSuffix: triagePayload,
       cwd:       opts.cwd,
       model:     opts.model,
-      modelFast: opts.modelFast,
       apiKey:    opts.apiKey,
       debug:     opts.debug,
       onChunk:   opts.onChunk,
@@ -1108,7 +1109,7 @@ export async function runSecretScan(
 
 // ── runExploitGen ─────────────────────────────────────────────────
 
-export interface ExploitGenOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'modelFast' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface ExploitGenOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
   /** JSON string describing the vulnerability (passed as prompt suffix). */
   vulnJson: string;
   /** Directory where artifact files (report.md, result.txt, error.txt) are copied. */
@@ -1140,7 +1141,6 @@ export async function runExploitGen(
     promptSuffix: opts.vulnJson,
     cwd:          opts.cwd,
     model:        opts.model,
-    modelFast:    opts.modelFast,
     apiKey:       opts.apiKey,
     debug:        opts.debug,
     onChunk:      opts.onChunk,

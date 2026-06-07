@@ -4,6 +4,12 @@ import { fetchTopFromLibrariesIo } from './libraries-io.js';
 import { fetchTopPypi } from './native-pypi.js';
 import { fetchTopPackagist } from './native-packagist.js';
 import { fetchTopCargo } from './native-cargo.js';
+import { fetchRecentFromLibrariesIo } from './recent-libraries-io.js';
+import {
+  fetchRecentPypi,
+  fetchRecentPackagist,
+  fetchRecentCargo,
+} from './native-recent.js';
 
 const NATIVE_ECOSYSTEMS = new Set<EcosystemId>(['pypi', 'php', 'rust']);
 
@@ -38,5 +44,29 @@ export async function fetchTopPackages(
       throw new Error(
         `${ecosystem}: native source unavailable. Set LIBRARIES_IO_KEY in top_packages/.env or use --source libraries-io.`,
       );
+  }
+}
+
+export async function fetchRecentPackages(
+  ecosystem: EcosystemId,
+  sinceHours: number,
+  maxResults: number | null,
+  onProgress?: FetchProgress,
+): Promise<TopPackageRow[]> {
+  // Native feeds are much faster than paginating libraries.io for these ecosystems.
+  switch (ecosystem) {
+    case 'pypi':
+      return fetchRecentPypi(sinceHours, maxResults, onProgress);
+    case 'php':
+      return fetchRecentPackagist(sinceHours, maxResults, onProgress);
+    case 'rust':
+      return fetchRecentCargo(sinceHours, maxResults, onProgress);
+    default:
+      if (!librariesIoKey()) {
+        throw new Error(
+          `${ecosystem}: --recent requires LIBRARIES_IO_KEY (set it in top_packages/.env)`,
+        );
+      }
+      return fetchRecentFromLibrariesIo(ecosystem, sinceHours, maxResults, onProgress);
   }
 }

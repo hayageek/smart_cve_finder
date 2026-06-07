@@ -50,6 +50,11 @@ export interface SecretScanOptions {
   minSeverity?: Severity;
   /** When true, mask secret values in stored findings (default: store full value). */
   redactSecrets?: boolean;
+  /**
+   * Skip secret processing when gitleaks raw hits exceed this count (likely test/fixture/spec data).
+   * Default: 20.
+   */
+  maxGitleaksRawHits?: number;
   log?: SecretScanLogger;
 }
 

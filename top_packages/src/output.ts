@@ -11,14 +11,17 @@ export function toCsv(rows: TopPackageRow[], urlsOnly: boolean): string {
     return `${urls.join('\n')}\n`;
   }
 
-  const header =
-    'rank,ecosystem,name,version,repo_url,homepage,license,downloads,dependents,stars';
+  const includePublished = rows.some((r) => r.publishedAt);
+  const header = includePublished
+    ? 'rank,ecosystem,name,version,published_at,repo_url,homepage,license,downloads,dependents,stars'
+    : 'rank,ecosystem,name,version,repo_url,homepage,license,downloads,dependents,stars';
   const lines = rows.map((r) =>
     [
       r.rank,
       r.ecosystem,
       r.name,
       r.version ?? '',
+      ...(includePublished ? [r.publishedAt ?? ''] : []),
       r.repoUrl ?? '',
       r.homepage ?? '',
       r.license ?? '',

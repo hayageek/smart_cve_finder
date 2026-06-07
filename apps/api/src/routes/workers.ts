@@ -112,24 +112,28 @@ router.post('/exploit/drain', async (_req, res) => {
 
 const SCAN_PIPELINE_ACTIVE = ['pending', 'cloning', 'scanning', 'exploiting', 'exploit-gen'] as const;
 
+async function buildQueueStatsResponse() {
+  const [scanPaused, exploitPaused, stats, scanJobGroups] = await Promise.all([
+    scanQueue.isPaused(),
+    exploitQueue.isPaused(),
+    getQueueStats(),
+    prisma.scanJob.groupBy({ by: ['status'], _count: true }),
+  ]);
+  const scanJobMap = Object.fromEntries(scanJobGroups.map((g) => [g.status, g._count]));
+  return {
+    stats,
+    paused: { scanner: scanPaused, exploit: exploitPaused },
+    pipeline: {
+      inProgress: SCAN_PIPELINE_ACTIVE.reduce((sum, s) => sum + (scanJobMap[s] ?? 0), 0),
+      done: scanJobMap['done'] ?? 0,
+      failed: (scanJobMap['failed'] ?? 0) + (scanJobMap['skipped'] ?? 0),
+    },
+  };
+}
+
 router.get('/queue-stats', async (_req, res) => {
   try {
-    const [scanPaused, exploitPaused, stats, scanJobGroups] = await Promise.all([
-      scanQueue.isPaused(),
-      exploitQueue.isPaused(),
-      getQueueStats(),
-      prisma.scanJob.groupBy({ by: ['status'], _count: true }),
-    ]);
-    const scanJobMap = Object.fromEntries(scanJobGroups.map((g) => [g.status, g._count]));
-    res.json({
-      stats,
-      paused: { scanner: scanPaused, exploit: exploitPaused },
-      pipeline: {
-        inProgress: SCAN_PIPELINE_ACTIVE.reduce((sum, s) => sum + (scanJobMap[s] ?? 0), 0),
-        done: scanJobMap['done'] ?? 0,
-        failed: (scanJobMap['failed'] ?? 0) + (scanJobMap['skipped'] ?? 0),
-      },
-    });
+    res.json(await buildQueueStatsResponse());
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -169,6 +173,26 @@ router.delete('/logs', (_req, res) => {
   }
 });
 
+/** Wipe Redis queues and scan job history so all worker page counters return to zero. */
+router.post('/queues/reset-all', async (_req, res) => {
+  try {
+    await Promise.all([
+      scanQueue.obliterate({ force: true }),
+      exploitQueue.obliterate({ force: true }),
+    ]);
+    await prisma.scanJob.deleteMany();
+    await prisma.repo.updateMany({
+      where: { status: { in: ['cloning', 'scanning', 'exploiting'] } },
+      data: { status: 'queued' },
+    });
+    const payload = await buildQueueStatsResponse();
+    emitQueueStats(payload.stats);
+    res.json({ ok: true, ...payload });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.post('/queues/:name/clear', async (req, res) => {
   try {
     const q = { 'repo-scan-queue': scanQueue, 'exploit-gen-queue': exploitQueue }[
@@ -176,6 +200,8 @@ router.post('/queues/:name/clear', async (req, res) => {
     ];
     if (!q) return res.status(404).json({ error: 'Queue not found' });
     await q.obliterate({ force: true });
+    const stats = await getQueueStats();
+    emitQueueStats(stats);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });

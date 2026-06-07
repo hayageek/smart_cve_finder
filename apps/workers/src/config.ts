@@ -29,8 +29,6 @@ const schema = z.object({
   CURSOR_AGENT_TIMEOUT_MS: z.coerce.number().default(300000),
   // Model passed to @cursor/sdk Agent.create(); use "composer-latest" or a specific model ID.
   CURSOR_AGENT_MODEL: z.string().default('claude-sonnet-4-5'),
-  // Composer 2.5 tier: false = standard (cheaper), true = fast (SDK default when omitted).
-  CURSOR_AGENT_MODEL_FAST: z.string().transform((v) => v === 'true').default('false'),
   CURSOR_API_KEY: z.string().optional(),
   // Set to "true" to log the full prompt and result text from @cursor/sdk calls
   DEBUG_CURSOR: z.string().transform((v) => v === 'true').default('false'),
@@ -47,6 +45,8 @@ const schema = z.object({
   SECRET_GATE_ONLY: z.string().transform((v) => v === 'true').default('false'),
   /** When true, mask secret values in DB and gitleaks report. Default false (full values stored). */
   SECRET_REDACT: z.string().transform((v) => v === 'true').default('false'),
+  /** Skip secret triage when gitleaks raw hits exceed this (likely test/fixture data). */
+  SECRET_MAX_GITLEAKS_RAW_HITS: z.coerce.number().min(1).default(20),
   SCANNER_CONCURRENCY: z.coerce.number().default(3),
   SCANNER_MAX_ATTEMPTS: z.coerce.number().default(2),
   SCANNER_BACKOFF_DELAY_MS: z.coerce.number().default(10000),

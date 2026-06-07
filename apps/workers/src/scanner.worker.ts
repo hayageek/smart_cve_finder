@@ -413,7 +413,6 @@ export const scanWorker = new Worker<ScanJobData>(
                 {
                   cwd: workspacePath,
                   model: config.CURSOR_AGENT_MODEL,
-                  modelFast: config.CURSOR_AGENT_MODEL_FAST,
                   apiKey: config.CURSOR_API_KEY,
                   debug: config.DEBUG_CURSOR,
                   semgrepEnabled: config.CVE_SEMGREP_ENABLED,
@@ -440,7 +439,6 @@ export const scanWorker = new Worker<ScanJobData>(
                 {
                   cwd: workspacePath,
                   model: config.CURSOR_AGENT_MODEL,
-                  modelFast: config.CURSOR_AGENT_MODEL_FAST,
                   apiKey: config.CURSOR_API_KEY,
                   debug: config.DEBUG_CURSOR,
                   gitleaksBin: config.SECRET_GITLEAKS_BIN,
@@ -448,6 +446,7 @@ export const scanWorker = new Worker<ScanJobData>(
                   minSeverity: config.SECRET_MIN_SEVERITY,
                   gateOnly: config.SECRET_GATE_ONLY,
                   redactSecrets: config.SECRET_REDACT,
+                  maxGitleaksRawHits: config.SECRET_MAX_GITLEAKS_RAW_HITS,
                   noGit: packageType !== 'git',
                 },
                 pipelineLog,

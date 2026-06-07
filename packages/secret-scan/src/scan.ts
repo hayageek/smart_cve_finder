@@ -8,6 +8,9 @@ import { redactSecret } from './redact.js';
 import { isExcludedPath } from './exclusions.js';
 import { isInvalidSecretShape } from './validate.js';
 
+/** Above this raw gitleaks count, hits are treated as test/fixture noise (e.g. OpenAPI examples). */
+export const DEFAULT_MAX_GITLEAKS_RAW_HITS = 20;
+
 const CRITICAL_RULES = new Set([
   'aws-secret-access-key',
   'aws-access-key-id',
@@ -161,6 +164,22 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
   }
 
   const gitleaksRawCount = gitleaksMatches.length;
+  const maxRawHits = opts.maxGitleaksRawHits ?? DEFAULT_MAX_GITLEAKS_RAW_HITS;
+  if (gitleaksRawCount > maxRawHits) {
+    log?.info(
+      `[secret-scan] gate complete — skipping ${gitleaksRawCount} gitleaks hit(s) ` +
+        `(>${maxRawHits} threshold; likely test/fixture/spec data, not actionable secrets)`,
+    );
+    return {
+      candidates: [],
+      gitleaksCount: 0,
+      gitleaksRawCount,
+      excludedCount: 0,
+      malformedFilteredCount: 0,
+      trufflehogCount: 0,
+    };
+  }
+
   let excludedCount = 0;
   let malformedFilteredCount = 0;
   gitleaksMatches = gitleaksMatches.filter((gl) => {
