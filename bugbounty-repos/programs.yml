@@ -1,0 +1,125 @@
+# Bug bounty programs → GitHub organizations
+#
+# Edit this file, then run:
+#   npm run bugbounty-repos -- -o bugbounty-active-repos.csv
+#
+# Fields:
+#   name  — display name in CSV output
+#   orgs  — GitHub org logins (case-sensitive)
+
+programs:
+  - name: Google
+    orgs:
+      - google
+      - googleapis
+      - chromium
+      - android
+      - flutter
+      - golang
+      - tensorflow
+
+  - name: Microsoft
+    orgs:
+      - microsoft
+      - Azure
+      - dotnet
+      - OfficeDev
+      - PowerShell
+      - microsoftgraph
+
+  - name: Meta
+    orgs:
+      - facebook
+      - facebookresearch
+      - Instagram
+      - WhatsApp
+
+  - name: Amazon/AWS
+    orgs:
+      - aws
+      - amzn
+      - alexa
+      - firecracker-microvm
+      - amazonlinux
+
+  - name: GitHub
+    orgs:
+      - github
+      - actions
+      - cli
+      - npm
+      - dependabot
+
+  - name: PayPal
+    orgs:
+      - paypal
+      - braintree
+      - venmo
+      - krakenjs
+
+  - name: Uber
+    orgs:
+      - uber
+      - uber-go
+      - jaegertracing
+
+  - name: Shopify
+    orgs:
+      - Shopify
+
+  - name: Netflix
+    orgs:
+      - Netflix
+
+  - name: Stripe
+    orgs:
+      - stripe
+      - stripe-samples
+
+  - name: Coinbase
+    orgs:
+      - coinbase
+      - CoinbaseWallet
+      - base-org
+
+  - name: Airbnb
+    orgs:
+      - airbnb
+
+  - name: Dropbox
+    orgs:
+      - dropbox
+
+  - name: Atlassian
+    orgs:
+      - atlassian
+
+  - name: GitLab
+    orgs:
+      - gitlabhq
+      - GitLab-Red-Team
+
+  - name: Twitter/X
+    orgs:
+      - twitter
+      - twitterdev
+
+  - name: Mozilla
+    orgs:
+      - mozilla
+      - mozilla-services
+      - mozilla-mobile
+
+  - name: Spotify
+    orgs:
+      - spotify
+
+  - name: Salesforce
+    orgs:
+      - salesforce
+      - forcedotcom
+      - salesforce-experience
+
+  - name: Cloudflare
+    orgs:
+      - cloudflare

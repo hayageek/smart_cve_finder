@@ -43,3 +43,7 @@ npm run cli -w apps/workers -- secrets https://github.com/org/repo
 npm run cli -w apps/workers -- secrets lodash --type npm --gate-only
 # Keep downloaded workspace
 npm run cli -w apps/workers -- secrets https://github.com/org/repo --gate-only --keep
+
+
+
+npm run bugbounty-repos -- -o bugbounty-active-repos.csv

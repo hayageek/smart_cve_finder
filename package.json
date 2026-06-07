@@ -4,7 +4,8 @@
   "workspaces": [
     "packages/*",
     "apps/*",
-    "top_packages"
+    "top_packages",
+    "bugbounty-repos"
   ],
   "scripts": {
     "dev:api": "npm run dev --workspace=apps/api",
@@ -18,7 +19,8 @@
     "cli": "npm run cli --workspace=apps/workers --",
     "npm-packages": "npm run npm-packages --workspace=apps/workers --",
     "github-pvr": "npm run github-pvr --workspace=apps/workers --",
-    "top-packages": "npm run cli --workspace=@secscan/top-packages --"
+    "top-packages": "npm run cli --workspace=@secscan/top-packages --",
+    "bugbounty-repos": "npm run cli --workspace=@secscan/bugbounty-repos --"
   },
   "engines": {
     "node": ">=20"

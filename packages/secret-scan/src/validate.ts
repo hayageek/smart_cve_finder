@@ -1,8 +1,8 @@
 /** Quotes, markup, and config delimiters — usually syntax around a token, not the secret itself. */
-const STRUCTURAL_CHARS = /[{}\[\]"'&()<>,`%+|@:;]/;
+const STRUCTURAL_CHARS = /[{}\[\]"'&()<>,`%+|@:;?]/;
 
 /** Same as STRUCTURAL_CHARS but allows `+` (valid inside 40-char AWS secret access keys). */
-const STRUCTURAL_CHARS_STRICT = /[{}\[\]"'&()<>,`%|@:;]/;
+const STRUCTURAL_CHARS_STRICT = /[{}\[\]"'&()<>,`%|@:;?]/;
 
 const PEM_PRIVATE_KEY = /-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+|ENCRYPTED\s+|DSA\s+|PGP\s+)?PRIVATE KEY(?:\s+BLOCK)?-----/;
 
@@ -20,6 +20,9 @@ const OPAQUE_BASE64_MIN_LEN = 80;
 
 /** Min run length for obvious placeholder sequences (abcd, 1234). */
 const SEQUENTIAL_PLACEHOLDER_MIN_LEN = 5;
+
+/** Full base32 alphabet — common doc/example OTP secret (e.g. rclone protondrive). */
+const BASE32_ALPHABET_PLACEHOLDER = /^ABCDEFGHIJKLMNOPQRSTUVWXYZ234567$/i;
 
 /** 32-char lowercase hex — MD5 / content hashes (together-ai rule FP). */
 const LOWERCASE_HEX_32 = /^[0-9a-f]{32}$/;
@@ -44,15 +47,7 @@ function isRedactedPlaceholder(value: string): boolean {
   return false;
 }
 
-/** Placeholder runs like `abcdef`, `12345`, or `fedcba` — not real secrets. */
-function looksLikeSequentialPlaceholder(value: string): boolean {
-  if (value.length < SEQUENTIAL_PLACEHOLDER_MIN_LEN) return false;
-
-  const lower = value.toLowerCase();
-  const allLetters = /^[a-z]+$/.test(lower);
-  const allDigits = /^[0-9]+$/.test(lower);
-  if (!allLetters && !allDigits) return false;
-
+function isAscendingOrDescendingRun(lower: string): boolean {
   const codes = [...lower].map((c) => c.charCodeAt(0));
   let ascending = true;
   let descending = true;
@@ -62,6 +57,47 @@ function looksLikeSequentialPlaceholder(value: string): boolean {
     if (diff !== -1) descending = false;
   }
   return ascending || descending;
+}
+
+/** Placeholder runs like `abcdef`, `12345`, or `fedcba` — not real secrets. */
+function looksLikeSequentialPlaceholder(value: string): boolean {
+  if (value.length < SEQUENTIAL_PLACEHOLDER_MIN_LEN) return false;
+
+  const lower = value.toLowerCase();
+  const allLetters = /^[a-z]+$/.test(lower);
+  const allDigits = /^[0-9]+$/.test(lower);
+  if (allLetters || allDigits) return isAscendingOrDescendingRun(lower);
+
+  // e.g. ABCDEFGHIJKLMNOPQRSTUVWXYZ234567 — sequential letters then sequential digits
+  const parts = value.match(/^([A-Za-z]{5,})([0-9]{5,})$/);
+  if (parts) {
+    return (
+      isAscendingOrDescendingRun(parts[1].toLowerCase()) &&
+      isAscendingOrDescendingRun(parts[2])
+    );
+  }
+
+  return false;
+}
+
+function looksLikeBase32AlphabetPlaceholder(value: string): boolean {
+  return BASE32_ALPHABET_PLACEHOLDER.test(value);
+}
+
+/** Obvious example/placeholder token (not a high-entropy credential). */
+function looksLikePlaceholderToken(value: string): boolean {
+  const t = value.trim();
+  if (!t) return true;
+  if (isRedactedPlaceholder(t)) return true;
+  if (looksLikeBase32AlphabetPlaceholder(t)) return true;
+  if (looksLikeSequentialPlaceholder(t)) return true;
+  return false;
+}
+
+/** RHS of `key=value` / `-flag=value` captures (incl. spaced ` = `). */
+function extractAssignmentRhs(value: string): string | undefined {
+  const m = value.match(/^-?[A-Za-z][A-Za-z0-9_-]*\s*=\s*(.+)$/);
+  return m?.[1]?.trim();
 }
 
 /**
@@ -87,7 +123,7 @@ function endsWithBase64Slash(value: string): boolean {
 
 /** Captured closing syntax from JSON, YAML, OpenAPI, or shell (not part of the token). */
 function hasTrailingCaptureJunk(value: string): boolean {
-  return /[.%\\|:\-+;]$/.test(value);
+  return /[.%\\|:\-+;?]$/.test(value);
 }
 
 /** Leading `\` from PHP namespaces, escaped `\n`, or other source-capture bleed. */
@@ -145,7 +181,8 @@ function looksLikeGitRemoteFragment(value: string): boolean {
 function looksLikeConfigAssignmentCapture(value: string): boolean {
   if (/:\s*[A-Za-z][A-Za-z0-9_]*\s*\|/.test(value)) return true;
   if (/^[A-Za-z][A-Za-z0-9_]*:\s/.test(value)) return true;
-  if (/^[A-Za-z][A-Za-z0-9_]*=.+$/.test(value)) return true;
+  const rhs = extractAssignmentRhs(value);
+  if (rhs && looksLikePlaceholderToken(rhs)) return true;
   if (/\b(?:KeyPrefix|ProjectToken|ApiKey)\b/i.test(value) && value.includes(':')) return true;
   return false;
 }
@@ -166,7 +203,9 @@ export function isInvalidSecretShape(value: string): boolean {
   const v = value.trim();
   if (!v) return true;
   if (isRedactedPlaceholder(v)) return true;
-  if (looksLikeSequentialPlaceholder(v)) return true;
+  if (looksLikePlaceholderToken(v)) return true;
+  const assignmentRhs = extractAssignmentRhs(v);
+  if (assignmentRhs && looksLikePlaceholderToken(assignmentRhs)) return true;
   if (PEM_PRIVATE_KEY.test(v)) return false;
   if (looksLikeAwsSecretAccessKey(v)) {
     if (STRUCTURAL_CHARS_STRICT.test(v)) return true;
