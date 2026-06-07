@@ -121,7 +121,8 @@ export default function SecretsConfirmed() {
     setPage(1);
   }, [searchParams]);
   const [fpFilter, setFpFilter] = useState('');
-  const [search, setSearch] = useState('');
+  const [repoSearch, setRepoSearch] = useState('');
+  const [valueSearch, setValueSearch] = useState('');
   const [selected, setSelected] = useState<ApiSecret | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
@@ -131,11 +132,12 @@ export default function SecretsConfirmed() {
   );
 
   const { data, isLoading } = useQuery({
-    queryKey: ['secrets', page, pageSize, severity, verifyStatus, ruleId, fpFilter, search],
+    queryKey: ['secrets', page, pageSize, severity, verifyStatus, ruleId, fpFilter, repoSearch, valueSearch],
     queryFn: () => api.getSecrets({
       page,
       pageSize,
-      repoUrl: search,
+      ...(repoSearch ? { repoUrl: repoSearch } : {}),
+      ...(valueSearch ? { value: valueSearch } : {}),
       ...(severity ? { severity } : {}),
       ...(verifyStatus ? { verifyStatus } : {}),
       ...(ruleId ? { ruleId } : {}),
@@ -239,7 +241,8 @@ export default function SecretsConfirmed() {
     >
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2 items-end">
-          <Input placeholder="Search repo…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="w-48" />
+          <Input placeholder="Search repo…" value={repoSearch} onChange={(e) => { setRepoSearch(e.target.value); setPage(1); }} className="w-48" />
+          <Input placeholder="Search value…" value={valueSearch} onChange={(e) => { setValueSearch(e.target.value); setPage(1); }} className="w-48" />
           <Select value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }} className="w-36">
             <option value="">All severities</option>
             {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}

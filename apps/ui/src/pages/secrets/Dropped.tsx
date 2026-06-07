@@ -42,7 +42,8 @@ export default function SecretsDropped() {
     setRuleId(searchParams.get('ruleId') ?? '');
     setPage(1);
   }, [searchParams]);
-  const [search, setSearch] = useState('');
+  const [repoSearch, setRepoSearch] = useState('');
+  const [valueSearch, setValueSearch] = useState('');
   const [selected, setSelected] = useState<ApiSecret | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
@@ -52,12 +53,13 @@ export default function SecretsDropped() {
   );
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dropped-secrets', page, pageSize, dropReason, severity, ruleId, search],
+    queryKey: ['dropped-secrets', page, pageSize, dropReason, severity, ruleId, repoSearch, valueSearch],
     queryFn: () => api.getDroppedSecrets({
       page,
       pageSize,
       dropReason,
-      repoUrl: search,
+      ...(repoSearch ? { repoUrl: repoSearch } : {}),
+      ...(valueSearch ? { value: valueSearch } : {}),
       ...(severity ? { severity } : {}),
       ...(ruleId ? { ruleId } : {}),
     }),
@@ -176,7 +178,8 @@ export default function SecretsDropped() {
     >
       <div className="space-y-4">
         <div className="flex flex-wrap gap-2 items-end">
-          <Input placeholder="Search repo…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="w-48" />
+          <Input placeholder="Search repo…" value={repoSearch} onChange={(e) => { setRepoSearch(e.target.value); setPage(1); }} className="w-48" />
+          <Input placeholder="Search value…" value={valueSearch} onChange={(e) => { setValueSearch(e.target.value); setPage(1); }} className="w-48" />
           <Select value={dropReason} onChange={(e) => { setDropReason(e.target.value); setPage(1); }} className="w-44">
             <option value="">All drop reasons</option>
             {DROP_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}

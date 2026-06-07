@@ -177,6 +177,11 @@ function looksLikeGitRemoteFragment(value: string): boolean {
   return /git@[a-z0-9.-]+\.(?:com|org)|ssh:\/\/git@|https:\/\/git@/i.test(value);
 }
 
+/** Bare credentials are single tokens; whitespace means a phrase or assignment was captured. */
+function containsWhitespace(value: string): boolean {
+  return /\s/.test(value);
+}
+
 /** Gitleaks captured `key: value` / `KEY=value` instead of the secret alone. */
 function looksLikeConfigAssignmentCapture(value: string): boolean {
   if (/:\s*[A-Za-z][A-Za-z0-9_]*\s*\|/.test(value)) return true;
@@ -206,7 +211,9 @@ export function isInvalidSecretShape(value: string): boolean {
   if (looksLikePlaceholderToken(v)) return true;
   const assignmentRhs = extractAssignmentRhs(v);
   if (assignmentRhs && looksLikePlaceholderToken(assignmentRhs)) return true;
+  if (looksLikePemMarkerOnly(v)) return true;
   if (PEM_PRIVATE_KEY.test(v)) return false;
+  if (containsWhitespace(v)) return true;
   if (looksLikeAwsSecretAccessKey(v)) {
     if (STRUCTURAL_CHARS_STRICT.test(v)) return true;
   } else if (STRUCTURAL_CHARS.test(v)) {
@@ -222,7 +229,6 @@ export function isInvalidSecretShape(value: string): boolean {
   if (looksLikeDashedHexFragment(v)) return true;
   if (looksLikeMd5Hash(v)) return true;
   if (looksLikeCodeIdentifier(v)) return true;
-  if (looksLikePemMarkerOnly(v)) return true;
   if (looksLikeGitRemoteFragment(v)) return true;
   if (looksLikeConfigAssignmentCapture(v)) return true;
   return looksLikeOpaqueBase64Blob(v);

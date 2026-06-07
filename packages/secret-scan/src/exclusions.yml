@@ -21,6 +21,8 @@ path_globs:
   - "!**/build/**"
   - "!**/out/**"
   - "!**/output/**"
+  - "!**/backup/**"
+  - "!**/backups/**"
   - "!**/target/**"
   - "!**/.gradle/**"
   - "!**/.cargo/registry/**"
