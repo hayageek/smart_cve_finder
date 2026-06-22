@@ -1,3 +1,4 @@
+export { isCommentedSecretLine, readLineAt } from './comment.js';
 export { runSecretScanGate, DEFAULT_MAX_GITLEAKS_RAW_HITS } from './scan.js';
 export type { SecretCandidate, SecretScanGateResult, SecretScanOptions, VerifyStatus } from './scan.js';
 export { redactSecret } from './redact.js';

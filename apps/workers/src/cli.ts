@@ -55,6 +55,7 @@ import {
   runCveScan,
   runSecretScan,
   runExploitGen,
+  type CveScanMode,
   type PipelineLogger,
 } from './pipeline.js';
 import { runSecretScanGate } from '@secscan/secret-scan';
@@ -88,6 +89,17 @@ const log  = {
   data:  (...a: unknown[]) => printLine('DATA', C.white, ...a),
   raw:   (...a: unknown[]) => console.log(...a),
 };
+
+function resolveCveScanMode(): CveScanMode {
+  const mode = process.env.CVE_SCAN_MODE ?? 'ai-finder';
+  if (mode === 'ai-finder' || mode === 'semgrep-pattern-hunter') return mode;
+  log.warn(`Invalid CVE_SCAN_MODE "${mode}", using ai-finder`);
+  return 'ai-finder';
+}
+
+function cveSkillPath(mode: CveScanMode): string {
+  return mode === 'semgrep-pattern-hunter' ? '/cve-pattern-hunter' : '/cve-ai-finder';
+}
 
 // ── Arg parsing ───────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -248,14 +260,21 @@ async function runScan() {
 
   // ── Inject skills ───────────────────────────────────────────────
   log.step('2/4  Injecting skills');
+  const cveScanMode = resolveCveScanMode();
   await injectSkills(
-    { workspacePath, skillsDir: opts.skillsDir, skillsRepoUrl: opts.skillsUrl, tmpDir: opts.workspace },
+    {
+      workspacePath,
+      skillsDir: opts.skillsDir,
+      skillsRepoUrl: opts.skillsUrl,
+      tmpDir: opts.workspace,
+      cveScanMode,
+    },
     plog,
   );
 
   // ── CVE scan ────────────────────────────────────────────────────
   log.step('3/4  Running CVE scan (streaming output below)');
-  printSkillHeader('CVE scan', '/cve-pattern-hunter', workspacePath);
+  printSkillHeader('CVE scan', cveSkillPath(cveScanMode), workspacePath);
 
   let findings: unknown[];
   let drops: unknown[];
@@ -267,6 +286,7 @@ async function runScan() {
         apiKey:           opts.apiKey,
         debug:            opts.debug,
         onChunk:          (chunk) => process.stdout.write(chunk),
+        scanMode:         cveScanMode,
         semgrepEnabled:   process.env.CVE_SEMGREP_ENABLED !== 'false',
         semgrepBin:       process.env.CVE_SEMGREP_BIN ?? 'semgrep',
         semgrepJobs:      process.env.CVE_SEMGREP_JOBS ? Number(process.env.CVE_SEMGREP_JOBS) : undefined,
@@ -525,6 +545,9 @@ async function runSecrets() {
     if (gate.severityFilteredCount) {
       log.raw(`  Below min severity: ${gate.severityFilteredCount} (min=${opts.secretMinSeverity})`);
     }
+    if (gate.commentedCount) {
+      log.raw(`  Commented lines   : ${gate.commentedCount}`);
+    }
     log.raw(`  Candidates        : ${gate.candidates.length}`);
     log.raw(`  Verified          : ${C.green}${verified.length}${C.reset}`);
     log.raw(`  Unverified        : ${C.yellow}${unverified.length}${C.reset}`);
@@ -544,7 +567,13 @@ async function runSecrets() {
 
   log.step('2/3  Injecting skills');
   await injectSkills(
-    { workspacePath, skillsDir: opts.skillsDir, skillsRepoUrl: opts.skillsUrl, tmpDir: opts.workspace },
+    {
+      workspacePath,
+      skillsDir: opts.skillsDir,
+      skillsRepoUrl: opts.skillsUrl,
+      tmpDir: opts.workspace,
+      cveScanMode: resolveCveScanMode(),
+    },
     plog,
   );
 
@@ -688,7 +717,13 @@ async function runExploit() {
 
   log.step(`${skillStepNum}  Injecting skills`);
   await injectSkills(
-    { workspacePath, skillsDir: opts.skillsDir, skillsRepoUrl: opts.skillsUrl, tmpDir: opts.workspace },
+    {
+      workspacePath,
+      skillsDir: opts.skillsDir,
+      skillsRepoUrl: opts.skillsUrl,
+      tmpDir: opts.workspace,
+      cveScanMode: resolveCveScanMode(),
+    },
     plog,
   );
 

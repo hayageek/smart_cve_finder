@@ -21,7 +21,7 @@ const schema = z.object({
   WORKSPACES_DIR: absolutePath('./data/workspaces'),
   REPORTS_DIR:    absolutePath('./data/atlassian_reports'),
   LOGS_DIR:       absolutePath('./data/logs'),
-  // Local directory containing the pre-cloned security skills (cve-pattern-hunter, exploit-generator).
+  // Local directory containing security skills (cve-ai-finder or cve-pattern-hunter, exploit-generator, …).
   // Takes precedence over SKILLS_REPO_URL — if the directory exists, no git clone is performed.
   SKILLS_DIR:     absolutePath('/data/skills'),
   SKILLS_REPO_URL: z.string().default('https://github.com/hayageek/security_skills'),
@@ -32,7 +32,13 @@ const schema = z.object({
   CURSOR_API_KEY: z.string().optional(),
   // Set to "true" to log the full prompt and result text from @cursor/sdk calls
   DEBUG_CURSOR: z.string().transform((v) => v === 'true').default('false'),
-  // Semgrep candidate gate before cve-pattern-hunter (requires `semgrep` on PATH).
+  /**
+   * CVE hunt backend:
+   * - ai-finder — Cursor cve-ai-finder skill only (no Semgrep)
+   * - semgrep-pattern-hunter — Semgrep candidate gate + cve-pattern-hunter verification
+   */
+  CVE_SCAN_MODE: z.enum(['ai-finder', 'semgrep-pattern-hunter']).default('ai-finder'),
+  // semgrep-pattern-hunter mode only (requires `semgrep` on PATH).
   // No Semgrep matches → cve-pattern-hunter (cursor scan) is skipped entirely.
   CVE_SEMGREP_ENABLED: z.string().transform((v) => v !== 'false').default('true'),
   CVE_SEMGREP_BIN: z.string().default('semgrep'),
@@ -78,6 +84,8 @@ if (!parsed.success) {
 
 export const config = parsed.data;
 
+export type CveScanMode = typeof config.CVE_SCAN_MODE;
+
 // ── Path pre-flight ──────────────────────────────────────────────
 // Create the data directories up-front so the workers fail loudly at
 // startup (instead of silently mkdir-ing them later from inside a job).
@@ -103,7 +111,8 @@ if (process.env.DEBUG_CONFIG_PATHS !== 'false') {
     `[config]   WORKSPACES_DIR = ${config.WORKSPACES_DIR}\n` +
     `[config]   REPORTS_DIR    = ${config.REPORTS_DIR}\n` +
     `[config]   LOGS_DIR       = ${config.LOGS_DIR}\n` +
-    `[config]   SKILLS_DIR     = ${config.SKILLS_DIR}\n`,
+    `[config]   SKILLS_DIR     = ${config.SKILLS_DIR}\n` +
+    `[config]   CVE_SCAN_MODE  = ${config.CVE_SCAN_MODE}\n`,
   );
 }
 

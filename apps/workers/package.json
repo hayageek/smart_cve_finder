@@ -13,6 +13,7 @@
     "npm-packages": "tsx src/npm-packages-cli.ts"
   },
   "dependencies": {
+    "@connectrpc/connect-node": "^1.6.1",
     "@secscan/cve-semgrep": "*",
     "@secscan/secret-scan": "*",
     "@cursor/sdk": "^1.0.13",

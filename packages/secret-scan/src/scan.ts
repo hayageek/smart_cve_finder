@@ -7,6 +7,7 @@ import { findTrufflehogMatch, runTrufflehogVerify } from './trufflehog.js';
 import { redactSecret } from './redact.js';
 import { isExcludedPath } from './exclusions.js';
 import { isInvalidSecretShape } from './validate.js';
+import { isCommentedSecretLine, readLineAt } from './comment.js';
 
 /** Above this raw gitleaks count, hits are treated as test/fixture noise (e.g. OpenAPI examples). */
 export const DEFAULT_MAX_GITLEAKS_RAW_HITS = 20;
@@ -123,6 +124,7 @@ function toCandidate(
     path: relPath,
     lineStart: gl.StartLine,
     lineEnd: gl.EndLine || gl.StartLine,
+    startColumn: gl.StartColumn,
     secretType: gl.RuleID,
     redactedValue: secretValue,
     entropy: gl.Entropy,
@@ -154,6 +156,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     log?.warn(`[secret-scan] gitleaks gate failed: ${msg}`);
     return {
       candidates: [],
+      commentedCandidates: [],
       gitleaksCount: 0,
       gitleaksRawCount: 0,
       excludedCount: 0,
@@ -172,6 +175,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     );
     return {
       candidates: [],
+      commentedCandidates: [],
       gitleaksCount: 0,
       gitleaksRawCount,
       excludedCount: 0,
@@ -213,6 +217,7 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     );
     return {
       candidates: [],
+      commentedCandidates: [],
       gitleaksCount: 0,
       gitleaksRawCount,
       excludedCount,
@@ -241,6 +246,20 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
     return toCandidate(opts.cwd, gl, status, th?.detectorName, opts.redactSecrets);
   });
 
+  const commentedCandidates: SecretCandidate[] = [];
+  candidates = candidates.filter((c) => {
+    const line = readLineAt(opts.cwd, c.path, c.lineStart);
+    if (line !== undefined && isCommentedSecretLine(line, c.startColumn)) {
+      commentedCandidates.push(c);
+      return false;
+    }
+    return true;
+  });
+
+  if (commentedCandidates.length > 0) {
+    log?.info(`[secret-scan] commented line filter removed ${commentedCandidates.length} candidate(s)`);
+  }
+
   let severityFilteredCount = 0;
   if (opts.minSeverity && opts.minSeverity !== 'LOW') {
     const before = candidates.length;
@@ -263,10 +282,12 @@ export async function runSecretScanGate(opts: SecretScanOptions): Promise<Secret
 
   return {
     candidates,
+    commentedCandidates,
     gitleaksCount: gitleaksMatches.length,
     gitleaksRawCount,
     excludedCount,
     malformedFilteredCount,
+    commentedCount: commentedCandidates.length,
     trufflehogCount: trufflehogMatches.length,
     trufflehogError,
     severityFilteredCount,

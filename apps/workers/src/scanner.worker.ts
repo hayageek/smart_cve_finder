@@ -378,13 +378,14 @@ export const scanWorker = new Worker<ScanJobData>(
       await updateScanJob(prisma, scanJobId, { status: 'scanning', stage: 'scan' });
       await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'scanning' } });
 
-      jobLog.info({ workspacePath, skillsDir: config.SKILLS_DIR }, 'scanner.worker: injecting security skills');
+      jobLog.info({ workspacePath, skillsDir: config.SKILLS_DIR, cveScanMode: config.CVE_SCAN_MODE }, 'scanner.worker: injecting security skills');
       await injectSkills(
         {
           workspacePath,
           skillsDir:     config.SKILLS_DIR,
           skillsRepoUrl: config.SKILLS_REPO_URL,
           tmpDir:        config.WORKSPACES_DIR,
+          cveScanMode:   config.CVE_SCAN_MODE,
         },
         pipelineLog,
       );
@@ -402,7 +403,8 @@ export const scanWorker = new Worker<ScanJobData>(
         ? (async () => {
             jobLog.info(
               {
-                skill: '/cve-pattern-hunter',
+                skill: config.CVE_SCAN_MODE === 'semgrep-pattern-hunter' ? '/cve-pattern-hunter' : '/cve-ai-finder',
+                cveScanMode: config.CVE_SCAN_MODE,
                 cwd: workspacePath,
                 model: config.CURSOR_AGENT_MODEL,
               },
@@ -415,6 +417,7 @@ export const scanWorker = new Worker<ScanJobData>(
                   model: config.CURSOR_AGENT_MODEL,
                   apiKey: config.CURSOR_API_KEY,
                   debug: config.DEBUG_CURSOR,
+                  scanMode: config.CVE_SCAN_MODE,
                   semgrepEnabled: config.CVE_SEMGREP_ENABLED,
                   semgrepBin: config.CVE_SEMGREP_BIN,
                   semgrepJobs: config.CVE_SEMGREP_JOBS,
@@ -423,7 +426,7 @@ export const scanWorker = new Worker<ScanJobData>(
               );
             } catch (err: unknown) {
               const execErr = err as { message?: string };
-              throw new Error(`cve-pattern-hunter failed: ${execErr.message}`);
+              throw new Error(`CVE scan failed (${config.CVE_SCAN_MODE}): ${execErr.message}`);
             }
           })()
         : Promise.resolve({ findings: [], drops: [], rawOutput: '' });

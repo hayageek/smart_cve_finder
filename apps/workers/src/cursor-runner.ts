@@ -230,16 +230,16 @@ export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkill
     }
 
   } catch (err) {
-    if (debug) {
-      DBG.line('ERROR');
-      process.stderr.write(`[cursor-runner] ${String(err)}\n`);
-    }
+    const errMsg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[cursor-runner] ERROR: ${errMsg}\n`);
+    if (options.onDebug) options.onDebug(`[cursor-runner] ERROR: ${errMsg}`);
+    if (debug) DBG.line('ERROR');
     if (err instanceof CursorAgentError) {
       const retryHint = err.isRetryable ? ' (retryable)' : '';
       const authHint  = err.message?.toLowerCase().includes('unauth')
         ? ' — verify CURSOR_API_KEY at https://cursor.com/settings'
         : '';
-      throw new Error(`Cursor agent startup failed: ${err.message}${retryHint}${authHint}`);
+      throw new Error(`Cursor agent failed: ${err.message}${retryHint}${authHint}`);
     }
     throw err;
   } finally {

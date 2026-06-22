@@ -27,6 +27,9 @@ import { runSemgrepScan } from '@secscan/cve-semgrep';
 import { runSecretScanGate, redactSecret, type SecretCandidate } from '@secscan/secret-scan';
 import { runCursorSkill } from './cursor-runner.js';
 import type { RunSkillOptions } from './cursor-runner.js';
+import type { CveScanMode } from './config.js';
+
+export type { CveScanMode };
 
 export type { VulnerabilityFinding, DroppedFinding, SecretFinding, DroppedSecretFinding };
 
@@ -492,21 +495,32 @@ export interface InjectSkillsOptions {
   skillsRepoUrl: string;
   /** Temp directory for git clone fallback (should be inside workspaces root). */
   tmpDir: string;
+  /** Which CVE skill bundle to inject (default: ai-finder). */
+  cveScanMode?: CveScanMode;
+}
+
+function skillsForCveMode(mode: CveScanMode): string[] {
+  const cveSkill = mode === 'semgrep-pattern-hunter' ? 'cve-pattern-hunter' : 'cve-ai-finder';
+  return [cveSkill, 'exploit-generator', 'secret-finding-triage'];
 }
 
 /**
- * Copy cve-pattern-hunter and exploit-generator skills into the workspace's
- * .cursor/skills directory. Tries skillsDir first; falls back to a git clone.
+ * Copy security skills into the workspace's .cursor/skills directory.
+ * Tries skillsDir first; falls back to a git clone.
  */
 export async function injectSkills(
   opts: InjectSkillsOptions,
   log: PipelineLogger = noopLogger,
 ): Promise<void> {
   const { workspacePath, skillsDir, skillsRepoUrl, tmpDir } = opts;
+  const cveScanMode = opts.cveScanMode ?? 'ai-finder';
   const skillsDest = path.join(workspacePath, '.cursor', 'skills');
   await mkdir(skillsDest, { recursive: true });
 
-  const skills = ['cve-pattern-hunter', 'exploit-generator', 'secret-finding-triage'];
+  const skills = skillsForCveMode(cveScanMode);
+  log.info(`CVE scan mode: ${cveScanMode} (injecting: ${skills.join(', ')})`);
+
+  const missingSkills: string[] = [];
 
   if (existsSync(skillsDir)) {
     log.info(`Copying skills from ${skillsDir}`);
@@ -517,6 +531,7 @@ export async function injectSkills(
         log.info(`Copied skill: ${skill}`);
       } else {
         log.warn(`Skill not found in SKILLS_DIR: ${skill}`);
+        missingSkills.push(skill);
       }
     }
   } else {
@@ -529,6 +544,9 @@ export async function injectSkills(
         if (existsSync(src)) {
           await cp(src, path.join(skillsDest, skill), { recursive: true });
           log.info(`Injected skill: ${skill}`);
+        } else {
+          log.warn(`Skill not found in cloned repo: ${skill}`);
+          missingSkills.push(skill);
         }
       }
     } catch (err) {
@@ -536,6 +554,17 @@ export async function injectSkills(
     } finally {
       await rm(skillsTmp, { recursive: true, force: true }).catch(() => {});
     }
+  }
+
+  const cveSkill = skills[0];
+  if (missingSkills.includes(cveSkill)) {
+    throw new Error(
+      `Required CVE skill "${cveSkill}" missing from SKILLS_DIR (${skillsDir}). ` +
+      `Mount ./skills with ${cveSkill}/ or set CVE_SCAN_MODE=semgrep-pattern-hunter if using the remote skills repo.`,
+    );
+  }
+  if (missingSkills.length > 0) {
+    log.warn(`Optional skills missing (scan may degrade): ${missingSkills.join(', ')}`);
   }
 }
 
@@ -779,17 +808,19 @@ export async function collectArtifactsFromWorkspace(
 
 // ── runCveScan ────────────────────────────────────────────────────
 
-/** Empty cve-pattern-hunter JSON blocks returned when the Semgrep gate skips the agent. */
+/** Empty CVE hunter JSON blocks (findings + drops). */
 export const EMPTY_CVE_SCAN_OUTPUT =
   '<<<CVE_HUNTER_FINDINGS_JSON>>>\n[]\n<<<END_CVE_HUNTER_FINDINGS_JSON>>>\n' +
   '<<<CVE_HUNTER_DROPS_JSON>>>\n[]\n<<<END_CVE_HUNTER_DROPS_JSON>>>';
 
 export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
-  /** Run the Semgrep candidate scan before the agent (default: true). */
+  /** CVE hunt backend (default: ai-finder). */
+  scanMode?: CveScanMode;
+  /** semgrep-pattern-hunter mode: run Semgrep before the agent (default: true). */
   semgrepEnabled?: boolean;
-  /** Semgrep binary (default: semgrep). */
+  /** semgrep-pattern-hunter mode: Semgrep binary (default: semgrep). */
   semgrepBin?: string;
-  /** Parallelism passed to `semgrep --jobs`. */
+  /** semgrep-pattern-hunter mode: parallelism passed to `semgrep --jobs`. */
   semgrepJobs?: number;
 }
 
@@ -799,18 +830,35 @@ export interface CveScanResult {
   rawOutput: string;
 }
 
-/**
- * Run the cve-pattern-hunter skill against a workspace and return parsed findings.
- *
- * Semgrep is the mandatory front gate: it enumerates candidate sinks and is the
- * required input for the cve-pattern-hunter skill. **If Semgrep produces no
- * matches the cursor scan does not run** — the skill has nothing to verify.
- *
- * Used by both the BullMQ scanWorker and the CLI's `scan` command.
- */
-export async function runCveScan(
+async function runAiFinderCveScan(
   opts: CveScanOptions,
-  log: PipelineLogger = noopLogger,
+  log: PipelineLogger,
+): Promise<CveScanResult> {
+  log.info(`CVE scan (ai-finder): workspace ${opts.cwd}`);
+
+  const result = await runCursorSkill({
+    skillPath:
+      `Follow the "cve-ai-finder" skill instructions to perform an end-to-end source-to-sink security scan.\n` +
+      `Workspace: ${opts.cwd}`,
+    cwd: opts.cwd,
+    model: opts.model,
+    apiKey: opts.apiKey,
+    debug: opts.debug,
+    onChunk: opts.onChunk,
+    onDebug: (msg) => log.info(`[cursor] ${msg}`),
+  });
+
+  const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
+  const rawDrops = extractJsonBlock<Record<string, unknown>[]>(result.text, 'CVE_HUNTER_DROPS_JSON') ?? [];
+  const drops = rawDrops.map(normalizeDroppedFinding);
+  log.info(`CVE scan (ai-finder) complete: ${findings.length} findings, ${drops.length} drops`);
+
+  return { findings, drops, rawOutput: result.text };
+}
+
+async function runSemgrepPatternHunterCveScan(
+  opts: CveScanOptions,
+  log: PipelineLogger,
 ): Promise<CveScanResult> {
   const semgrepOn = opts.semgrepEnabled !== false;
 
@@ -842,9 +890,6 @@ export async function runCveScan(
     .join('; ');
   log.info(`Semgrep scan: ${semgrep.matches.length} candidate(s) — ${sample}${semgrep.matches.length > 3 ? '…' : ''}`);
 
-  // The cve-pattern-hunter skill is driven entirely by the Semgrep candidate
-  // list — pass it verbatim as the prompt suffix so the agent only verifies
-  // these sinks instead of re-enumerating them.
   const candidateJson = JSON.stringify(
     { matches: semgrep.matches, languagesScanned: semgrep.languagesScanned },
     null,
@@ -857,20 +902,39 @@ export async function runCveScan(
       `Workspace: ${opts.cwd}\n` +
       `Semgrep candidate list:`,
     promptSuffix: candidateJson,
-    cwd:       opts.cwd,
-    model:     opts.model,
-    apiKey:    opts.apiKey,
-    debug:     opts.debug,
-    onChunk:   opts.onChunk,
+    cwd: opts.cwd,
+    model: opts.model,
+    apiKey: opts.apiKey,
+    debug: opts.debug,
+    onChunk: opts.onChunk,
     onDebug: (msg) => log.info(`[cursor] ${msg}`),
   });
 
   const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
   const rawDrops = extractJsonBlock<Record<string, unknown>[]>(result.text, 'CVE_HUNTER_DROPS_JSON') ?? [];
   const drops = rawDrops.map(normalizeDroppedFinding);
-  log.info(`CVE scan complete: ${findings.length} findings, ${drops.length} drops`);
+  log.info(`CVE scan (semgrep-pattern-hunter) complete: ${findings.length} findings, ${drops.length} drops`);
 
   return { findings, drops, rawOutput: result.text };
+}
+
+/**
+ * Run a CVE hunt against a workspace and return parsed findings.
+ *
+ * Mode `ai-finder` (default): Cursor cve-ai-finder skill — no Semgrep.
+ * Mode `semgrep-pattern-hunter`: Semgrep enumerates sinks, then cve-pattern-hunter verifies.
+ *
+ * Used by both the BullMQ scanWorker and the CLI's `scan` command.
+ */
+export async function runCveScan(
+  opts: CveScanOptions,
+  log: PipelineLogger = noopLogger,
+): Promise<CveScanResult> {
+  const mode = opts.scanMode ?? 'ai-finder';
+  if (mode === 'semgrep-pattern-hunter') {
+    return runSemgrepPatternHunterCveScan(opts, log);
+  }
+  return runAiFinderCveScan(opts, log);
 }
 
 // ── runSecretScan ─────────────────────────────────────────────────
@@ -922,6 +986,31 @@ function candidateToFinding(c: SecretCandidate, idx: number): SecretFinding {
   };
 }
 
+function candidateToDrop(
+  c: SecretCandidate,
+  dropReason: string,
+  dropEvidence: string,
+): DroppedSecretFinding {
+  return {
+    rule_id: c.ruleId,
+    path: c.path,
+    start: { line: c.lineStart },
+    end: { line: c.lineEnd },
+    extra: {
+      message: c.description,
+      severity: c.severity,
+      metadata: {
+        secret_type: c.secretType,
+        redacted_value: c.redactedValue,
+        verify_status: c.verifyStatus,
+        detector_name: c.detectorName,
+      },
+    },
+    drop_reason: dropReason,
+    drop_evidence: dropEvidence,
+  };
+}
+
 function normalizeDroppedSecret(raw: Record<string, unknown>): DroppedSecretFinding {
   const extra = raw.extra as Record<string, unknown> | undefined;
   const meta = (raw.metadata ?? extra?.metadata) as Record<string, unknown> | undefined;
@@ -970,14 +1059,24 @@ export async function runSecretScan(
     return { findings: [], drops: [], rawOutput: EMPTY_SECRET_SCAN_OUTPUT };
   }
 
+  const commentedDrops = (gate.commentedCandidates ?? []).map((c) =>
+    candidateToDrop(
+      c,
+      'commented',
+      `Secret appears on a commented line (#) at ${c.path}:${c.lineStart}`,
+    ),
+  );
+
   if (gate.candidates.length === 0) {
     log.info(
       `[secret-scan] no candidates` +
         (gate.gitleaksRawCount > 0
-          ? ` (${gate.gitleaksRawCount} gitleaks hit(s), ${gate.excludedCount} excluded)`
+          ? ` (${gate.gitleaksRawCount} gitleaks hit(s), ${gate.excludedCount} excluded` +
+            (commentedDrops.length > 0 ? `, ${commentedDrops.length} commented` : '') +
+            ')'
           : ''),
     );
-    return { findings: [], drops: [], rawOutput: EMPTY_SECRET_SCAN_OUTPUT };
+    return { findings: [], drops: commentedDrops, rawOutput: EMPTY_SECRET_SCAN_OUTPUT };
   }
 
   if (gate.trufflehogError) {
@@ -998,24 +1097,13 @@ export async function runSecretScan(
     if (c.verifyStatus === 'verified') {
       confirmed.push(candidateToFinding(c, idx));
     } else if (c.verifyStatus === 'dead') {
-      autoDrops.push({
-        rule_id: c.ruleId,
-        path: c.path,
-        start: { line: c.lineStart },
-        end: { line: c.lineEnd },
-        extra: {
-          message: c.description,
-          severity: c.severity,
-          metadata: {
-            secret_type: c.secretType,
-            redacted_value: c.redactedValue,
-            verify_status: 'dead',
-            detector_name: c.detectorName,
-          },
-        },
-        drop_reason: 'trufflehog-dead',
-        drop_evidence: `TruffleHog marked credential as inactive/dead at ${c.path}:${c.lineStart}`,
-      });
+      autoDrops.push(
+        candidateToDrop(
+          c,
+          'trufflehog-dead',
+          `TruffleHog marked credential as inactive/dead at ${c.path}:${c.lineStart}`,
+        ),
+      );
     } else {
       forTriage.push(c);
     }
@@ -1023,7 +1111,8 @@ export async function runSecretScan(
 
   log.info(
     `[secret-scan] routing — ${confirmed.length} auto-confirmed (verified), ` +
-      `${autoDrops.length} auto-dropped (dead), ${forTriage.length} for triage skill`,
+      `${autoDrops.length} auto-dropped (dead), ${commentedDrops.length} auto-dropped (commented), ` +
+      `${forTriage.length} for triage skill`,
   );
 
   let triageFindings: SecretFinding[] = [];
@@ -1098,10 +1187,11 @@ export async function runSecretScan(
   }
 
   const findings = [...confirmed, ...triageFindings];
-  const drops = [...autoDrops, ...triageDrops];
+  const drops = [...commentedDrops, ...autoDrops, ...triageDrops];
   log.info(
     `[secret-scan] complete — ${findings.length} finding(s), ${drops.length} drop(s) ` +
-      `(${confirmed.length} verified + ${triageFindings.length} triaged, ${autoDrops.length} dead + ${triageDrops.length} triage-dropped)`,
+      `(${confirmed.length} verified + ${triageFindings.length} triaged, ` +
+      `${commentedDrops.length} commented + ${autoDrops.length} dead + ${triageDrops.length} triage-dropped)`,
   );
 
   return { findings, drops, rawOutput };

@@ -31,6 +31,7 @@ export interface SecretCandidate {
   path: string;
   lineStart: number;
   lineEnd: number;
+  startColumn?: number;
   secretType: string;
   redactedValue: string;
   entropy?: number;
@@ -65,6 +66,8 @@ export interface SecretScanLogger {
 
 export interface SecretScanGateResult {
   candidates: SecretCandidate[];
+  /** Candidates on commented lines (`#` before the match). */
+  commentedCandidates: SecretCandidate[];
   /** Gitleaks hits after path exclusions. */
   gitleaksCount: number;
   /** Gitleaks hits before path exclusions. */
@@ -72,6 +75,7 @@ export interface SecretScanGateResult {
   excludedCount: number;
   /** Gitleaks hits removed because the value contained JSON/config brackets. */
   malformedFilteredCount?: number;
+  commentedCount?: number;
   trufflehogCount: number;
   trufflehogError?: string;
   /** Candidates removed because severity was below minSeverity. */

@@ -15,7 +15,7 @@ type ScanMode = 'both' | 'cve' | 'secrets';
 
 const SCAN_MODES: { value: ScanMode; label: string; description: string }[] = [
   { value: 'both', label: 'Both', description: 'CVE hunt + secret scan' },
-  { value: 'cve', label: 'CVE Hunt', description: 'Semgrep + cve-pattern-hunter only' },
+  { value: 'cve', label: 'CVE Hunt', description: 'cve-ai-finder (default) or Semgrep + cve-pattern-hunter via CVE_SCAN_MODE' },
   { value: 'secrets', label: 'Secrets', description: 'Gitleaks + TruffleHog + triage only' },
 ];
 

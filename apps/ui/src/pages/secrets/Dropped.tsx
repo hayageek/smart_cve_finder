@@ -18,6 +18,7 @@ import { formatDate, formatFileLine, formatFileLineBasename } from '../../lib/ut
 import type { ApiSecret } from '@secscan/shared';
 
 const DROP_REASONS = [
+  'commented',
   'trufflehog-dead',
   'example-or-doc',
   'test-fixture',
