@@ -437,6 +437,12 @@ export interface WorkerConfig {
   anthropicBaseUrl: string | null;
   /** Claude API key. Empty string means do not send ANTHROPIC_API_KEY. */
   anthropicApiKey: string | null;
+  cursorAgentModel: string | null;
+  cursorApiKey: string | null;
+  cursorAgentTimeoutMs: number | null;
+  debugAgent: boolean | null;
+  claudeMaxTokens: number | null;
+  claudeAgentMaxTurns: number | null;
 }
 
 /** GET /api/workers/config — effective agent settings + env inheritance hints. */
@@ -446,4 +452,11 @@ export interface WorkerConfigView extends WorkerConfig {
   claudeAgentModelFromEnv?: boolean;
   agentRunnerFromEnv?: boolean;
   anthropicBaseUrlFromEnv?: boolean;
+  cursorAgentModelFromEnv?: boolean;
+  cursorApiKeyConfigured?: boolean;
+  cursorApiKeyFromEnv?: boolean;
+  cursorAgentTimeoutMsFromEnv?: boolean;
+  debugAgentFromEnv?: boolean;
+  claudeMaxTokensFromEnv?: boolean;
+  claudeAgentMaxTurnsFromEnv?: boolean;
 }

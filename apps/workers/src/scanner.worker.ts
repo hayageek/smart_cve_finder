@@ -27,10 +27,10 @@ import {
   type DroppedSecretFinding,
   type ScanMode,
   type WorkerConfig,
-  resolveAgentSettings,
   type PackageType,
 } from '@secscan/shared';
 import { config, redisOptions } from './config.js';
+import { resolveWorkerAgentRuntime } from './agent-runtime-env.js';
 import { createWorkerLogger } from './logger.js';
 import { notifyOnCritical, notifyOnScanComplete } from './notify.js';
 import { requireScanJob, updateScanJob } from './db-helpers.js';
@@ -455,13 +455,7 @@ export const scanWorker = new Worker<ScanJobData>(
       let rawSecretOutput = '';
 
       const workerCfg = (await prisma.workerConfig.findFirst()) as WorkerConfig | null;
-      const agent = resolveAgentSettings(workerCfg, {
-        runner: config.AGENT_RUNNER,
-        claudeModel: config.CLAUDE_AGENT_MODEL,
-        cursorModel: config.CURSOR_AGENT_MODEL,
-        baseUrl: config.ANTHROPIC_BASE_URL,
-        apiKey: config.ANTHROPIC_API_KEY,
-      });
+      const agent = resolveWorkerAgentRuntime(workerCfg);
       jobLog.info(
         {
           runner: agent.runner,
@@ -495,11 +489,12 @@ export const scanWorker = new Worker<ScanJobData>(
                   {
                     cwd: workspacePath,
                     model: agent.model,
-                    apiKey: config.CURSOR_API_KEY,
+                    apiKey: agent.cursorApiKey,
                     runner: agent.runner,
                     anthropicBaseUrl: agent.anthropicBaseUrl,
                     anthropicApiKey: agent.anthropicApiKey,
-                    debug: config.DEBUG_CURSOR,
+                    maxTurns: agent.claudeAgentMaxTurns,
+                    debug: agent.debugAgent,
                     scanMode: mode,
                     semgrepEnabled: config.CVE_SEMGREP_ENABLED,
                     semgrepBin: config.CVE_SEMGREP_BIN,
@@ -536,11 +531,12 @@ export const scanWorker = new Worker<ScanJobData>(
                 {
                   cwd: workspacePath,
                   model: agent.model,
-                  apiKey: config.CURSOR_API_KEY,
+                  apiKey: agent.cursorApiKey,
                   runner: agent.runner,
                   anthropicBaseUrl: agent.anthropicBaseUrl,
                   anthropicApiKey: agent.anthropicApiKey,
-                  debug: config.DEBUG_CURSOR,
+                  maxTurns: agent.claudeAgentMaxTurns,
+                  debug: agent.debugAgent,
                   gitleaksBin: config.SECRET_GITLEAKS_BIN,
                   trufflehogBin: config.SECRET_TRUFFLEHOG_BIN,
                   minSeverity: config.SECRET_MIN_SEVERITY,
@@ -566,7 +562,7 @@ export const scanWorker = new Worker<ScanJobData>(
       secretDrops = secretResult.drops;
       rawSecretOutput = secretResult.rawOutput;
 
-      if (config.DEBUG_CURSOR) {
+      if (config.DEBUG_AGENT) {
         if (rawCveOutput) {
           jobLog.debug(`\n${'─'.repeat(60)}\nCVE OUTPUT (${rawCveOutput.length} chars):\n${rawCveOutput}\n${'─'.repeat(60)}`);
         }

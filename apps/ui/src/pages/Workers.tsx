@@ -128,16 +128,42 @@ export default function Workers() {
   const updateConfig = useMutation({
     mutationFn: (data: Record<string, unknown>) => api.updateWorkerConfig(data),
     onSuccess: () => refetchConfig(),
+    meta: { successMessage: 'Worker settings saved' },
   });
 
-  const scannerPause = useMutation({ mutationFn: () => api.scannerPause(), onSuccess: () => refetchQueue() });
-  const scannerResume = useMutation({ mutationFn: () => api.scannerResume(), onSuccess: () => refetchQueue() });
-  const scannerDrain = useMutation({ mutationFn: () => api.scannerDrain(), onSuccess: () => refetchQueue() });
-  const exploitPause = useMutation({ mutationFn: () => api.exploitPause(), onSuccess: () => refetchQueue() });
-  const exploitResume = useMutation({ mutationFn: () => api.exploitResume(), onSuccess: () => refetchQueue() });
-  const exploitDrain = useMutation({ mutationFn: () => api.exploitDrain(), onSuccess: () => refetchQueue() });
+  const scannerPause = useMutation({
+    mutationFn: () => api.scannerPause(),
+    onSuccess: () => refetchQueue(),
+    meta: { successMessage: 'Scanner queue paused' },
+  });
+  const scannerResume = useMutation({
+    mutationFn: () => api.scannerResume(),
+    onSuccess: () => refetchQueue(),
+    meta: { successMessage: 'Scanner queue resumed' },
+  });
+  const scannerDrain = useMutation({
+    mutationFn: () => api.scannerDrain(),
+    onSuccess: () => refetchQueue(),
+    meta: { successMessage: 'Scanner queue drained' },
+  });
+  const exploitPause = useMutation({
+    mutationFn: () => api.exploitPause(),
+    onSuccess: () => refetchQueue(),
+    meta: { successMessage: 'Exploit queue paused' },
+  });
+  const exploitResume = useMutation({
+    mutationFn: () => api.exploitResume(),
+    onSuccess: () => refetchQueue(),
+    meta: { successMessage: 'Exploit queue resumed' },
+  });
+  const exploitDrain = useMutation({
+    mutationFn: () => api.exploitDrain(),
+    onSuccess: () => refetchQueue(),
+    meta: { successMessage: 'Exploit queue drained' },
+  });
   const resetAllQueues = useMutation({
     mutationFn: () => api.resetAllWorkerQueues(),
+    meta: { successMessage: 'All worker queues reset' },
     onSuccess: () => {
       qc.setQueryData(['worker-queue-stats'], (prev: typeof queueData) =>
         prev
@@ -189,6 +215,7 @@ export default function Workers() {
   const clearLogs = useMutation({
     mutationFn: () => api.clearWorkerLogs(),
     onSuccess: () => clearDisplay(),
+    meta: { successMessage: 'Worker logs cleared' },
   });
 
   return (
@@ -258,22 +285,39 @@ export default function Workers() {
               <span className="text-muted-foreground">Runner</span>
               <span className="font-mono text-xs">{config?.agentRunner ?? '—'}</span>
             </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">Claude model</span>
-              <span className="font-mono text-xs break-all text-right">{config?.claudeAgentModel ?? '—'}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">ANTHROPIC_BASE_URL</span>
-              <span className="font-mono text-xs break-all text-right max-w-[60%]">
-                {config?.anthropicBaseUrl || (config?.anthropicBaseUrlFromEnv ? '(from .env)' : '—')}
-              </span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-muted-foreground">ANTHROPIC_API_KEY</span>
-              <span className="font-mono text-xs">
-                {config?.anthropicApiKeyConfigured ? (config.anthropicApiKeyFromEnv ? 'Set (.env)' : 'Set (DB)') : 'Not set'}
-              </span>
-            </div>
+            {config?.agentRunner === 'claude' ? (
+              <>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Model</span>
+                  <span className="font-mono text-xs break-all text-right">{config.claudeAgentModel ?? '—'}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Base URL</span>
+                  <span className="font-mono text-xs break-all text-right max-w-[60%]">
+                    {config.anthropicBaseUrl || (config.anthropicBaseUrlFromEnv ? '(from .env)' : '—')}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">API key</span>
+                  <span className="font-mono text-xs">
+                    {config.anthropicApiKeyConfigured ? (config.anthropicApiKeyFromEnv ? 'Set (.env)' : 'Set (DB)') : 'Not set'}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Model</span>
+                  <span className="font-mono text-xs break-all text-right">{config?.cursorAgentModel ?? '—'}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">API key</span>
+                  <span className="font-mono text-xs">
+                    {config?.cursorApiKeyConfigured ? (config.cursorApiKeyFromEnv ? 'Set (.env)' : 'Set (DB)') : 'Not set'}
+                  </span>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 

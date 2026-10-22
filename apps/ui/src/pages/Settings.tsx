@@ -8,6 +8,7 @@ import { Select } from '../components/ui/Select.tsx';
 import { Tabs } from '../components/ui/Tabs.tsx';
 import { ConfirmDialog } from '../components/ui/Dialog.tsx';
 import { api, type McpConfigResponse } from '../lib/api.ts';
+import { useToast } from '../components/ui/Toast.tsx';
 import type { WorkerConfigView } from '@secscan/shared';
 
 const CLEAR_TARGETS = [
@@ -133,16 +134,56 @@ function GeneralTab() {
   );
 }
 
+type AgentTestResult = {
+  ok: boolean;
+  runner: 'cursor' | 'claude';
+  model: string;
+  message: string;
+  latencyMs: number;
+  detail?: string;
+  log?: string;
+};
+
+function AgentTestResultPanel({ result }: { result: AgentTestResult }) {
+  return (
+    <div
+      className={`rounded-md border px-3 py-2 text-sm ${
+        result.ok
+          ? 'border-green-500/40 bg-green-500/10 text-green-900 dark:text-green-100'
+          : 'border-destructive/40 bg-destructive/10 text-destructive'
+      }`}
+    >
+      <p className="font-medium">
+        {result.ok ? 'Connection OK' : 'Connection failed'} — {result.model}{' '}
+        <span className="text-xs font-normal opacity-80">({result.latencyMs} ms)</span>
+      </p>
+      <p className="text-xs mt-1 break-words">{result.message}</p>
+      {result.detail && (
+        <pre className="text-xs mt-2 whitespace-pre-wrap break-words opacity-90">{result.detail}</pre>
+      )}
+      {result.log && <p className="text-xs mt-2 opacity-80 font-mono">{result.log}</p>}
+    </div>
+  );
+}
+
 function ScannerTab() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data: config } = useQuery({ queryKey: ['worker-config'], queryFn: () => api.getWorkerConfig() as Promise<WorkerConfigView> });
+  const [testResult, setTestResult] = useState<AgentTestResult | null>(null);
   const [form, setForm] = useState({
     exploitMinSeverity: 'HIGH',
     exploitIncludeDropped: false,
     dedupWindowHours: 24,
     workspaceCleanupHours: 48,
     agentRunner: 'cursor',
+    cursorAgentModel: 'composer-2.5',
+    cursorApiKey: '',
+    cursorAgentTimeoutMs: 300_000,
+    debugAgent: false,
     claudeAgentModel: 'openai/glm-5.2',
+    claudeMaxTokens: 16_384,
+    claudeAgentMaxTurns: 50,
     anthropicBaseUrl: '',
     anthropicApiKey: '',
   });
@@ -154,64 +195,290 @@ function ScannerTab() {
       dedupWindowHours: config.dedupWindowHours,
       workspaceCleanupHours: config.workspaceCleanupHours,
       agentRunner: config.agentRunner === 'claude' ? 'claude' : 'cursor',
+      cursorAgentModel: config.cursorAgentModel ?? 'composer-2.5',
+      cursorApiKey: config.cursorApiKey ?? '',
+      cursorAgentTimeoutMs: config.cursorAgentTimeoutMs ?? 300_000,
+      debugAgent: config.debugAgent ?? false,
       claudeAgentModel: config.claudeAgentModel || 'openai/glm-5.2',
+      claudeMaxTokens: config.claudeMaxTokens ?? 16_384,
+      claudeAgentMaxTurns: config.claudeAgentMaxTurns ?? 50,
       anthropicBaseUrl: config.anthropicBaseUrl ?? '',
       anthropicApiKey: config.anthropicApiKey ?? '',
     });
   }, [config]);
 
+  const runner: 'cursor' | 'claude' = form.agentRunner === 'claude' ? 'claude' : 'cursor';
+
+  const buildSavePayload = (): Record<string, unknown> => {
+    const shared = {
+      exploitMinSeverity: form.exploitMinSeverity,
+      exploitIncludeDropped: form.exploitIncludeDropped,
+      dedupWindowHours: form.dedupWindowHours,
+      workspaceCleanupHours: form.workspaceCleanupHours,
+      agentRunner: runner,
+    };
+    if (runner === 'cursor') {
+      return {
+        ...shared,
+        cursorAgentModel: form.cursorAgentModel,
+        cursorApiKey: form.cursorApiKey,
+        cursorAgentTimeoutMs: form.cursorAgentTimeoutMs,
+        debugAgent: form.debugAgent,
+      };
+    }
+    return {
+      ...shared,
+      claudeAgentModel: form.claudeAgentModel,
+      claudeMaxTokens: form.claudeMaxTokens,
+      claudeAgentMaxTurns: form.claudeAgentMaxTurns,
+      anthropicBaseUrl: form.anthropicBaseUrl,
+      anthropicApiKey: form.anthropicApiKey,
+      debugAgent: form.debugAgent,
+    };
+  };
+
+  const testPayload = (): Record<string, unknown> => {
+    const base = { agentRunner: runner, debugAgent: form.debugAgent };
+    if (runner === 'cursor') {
+      return {
+        ...base,
+        cursorAgentModel: form.cursorAgentModel,
+        cursorApiKey: form.cursorApiKey || undefined,
+        cursorAgentTimeoutMs: form.cursorAgentTimeoutMs,
+      };
+    }
+    return {
+      ...base,
+      claudeAgentModel: form.claudeAgentModel,
+      claudeMaxTokens: form.claudeMaxTokens,
+      anthropicBaseUrl: form.anthropicBaseUrl,
+      anthropicApiKey: form.anthropicApiKey || undefined,
+    };
+  };
+
   const update = useMutation({
-    mutationFn: (data: typeof form) => api.updateWorkerConfig(data as Record<string, unknown>),
+    mutationFn: () => api.updateWorkerConfig(buildSavePayload()),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['worker-config'] }),
+    meta: { successMessage: 'Scanner settings saved' },
+  });
+
+  const testAgent = useMutation({
+    mutationFn: () => api.testAgentConnection(testPayload()),
+    meta: { silent: true },
+    onSuccess: (result) => {
+      setTestResult(result);
+      if (result.ok) toast.success('Agent test passed', `${result.runner} · ${result.model}`);
+      else toast.error('Agent test failed', result.message);
+    },
+    onError: (err) => {
+      setTestResult({
+        ok: false,
+        runner: form.agentRunner === 'claude' ? 'claude' : 'cursor',
+        model: form.agentRunner === 'claude' ? form.claudeAgentModel : form.cursorAgentModel,
+        message: err instanceof Error ? err.message : String(err),
+        latencyMs: 0,
+      });
+      toast.error('Agent test failed', err instanceof Error ? err.message : String(err));
+    },
   });
 
   return (
     <div className="space-y-4 max-w-lg">
       <div>
         <label className="text-sm font-medium">Agent runner</label>
-        <p className="text-xs text-muted-foreground">Cursor uses CURSOR_API_KEY. Claude uses ANTHROPIC_* below. Empty fields use <code className="text-xs">AGENT_RUNNER</code> from .env.</p>
-        <Select className="mt-1 w-full" value={form.agentRunner} onChange={(e) => setForm((f) => ({ ...f, agentRunner: e.target.value }))}>
-          <option value="cursor">cursor</option>
-          <option value="claude">claude</option>
+        <p className="text-xs text-muted-foreground">
+          Saved to the database and picked up by workers on the next job — no rebuild. Empty secret fields keep using <code className="text-xs">.env</code>.
+        </p>
+        <Select
+          className="mt-1 w-full"
+          value={runner}
+          onChange={(e) => {
+            const next = e.target.value === 'claude' ? 'claude' : 'cursor';
+            setTestResult(null);
+            setForm((f) => ({ ...f, agentRunner: next }));
+          }}
+        >
+          <option value="cursor">cursor (@cursor/sdk)</option>
+          <option value="claude">claude (Claude Agent SDK)</option>
         </Select>
-        {config?.agentRunnerFromEnv && (
-          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Effective runner from .env: {config.agentRunner}</p>
+        {config?.agentRunnerFromEnv && runner === config.agentRunner && (
+          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Runner inherited from .env until you save a choice here.</p>
         )}
       </div>
-      <div>
-        <label className="text-sm font-medium">Claude model</label>
-        <p className="text-xs text-muted-foreground">Model id when runner is Claude. Empty uses <code className="text-xs">CLAUDE_AGENT_MODEL</code> from .env.</p>
-        <Input className="mt-1" value={form.claudeAgentModel} onChange={(e) => setForm((f) => ({ ...f, claudeAgentModel: e.target.value }))} />
-        {config?.claudeAgentModelFromEnv && (
-          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Effective model from .env: {config.claudeAgentModel}</p>
-        )}
-      </div>
-      <div>
-        <label className="text-sm font-medium">ANTHROPIC_BASE_URL</label>
-        <p className="text-xs text-muted-foreground">Optional. Empty uses .env. Save a value here to override the environment.</p>
-        <Input className="mt-1" placeholder="http://localhost:4000" value={form.anthropicBaseUrl} onChange={(e) => setForm((f) => ({ ...f, anthropicBaseUrl: e.target.value }))} />
-        {config?.anthropicBaseUrlFromEnv && config.anthropicBaseUrl && (
-          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Using from .env: {config.anthropicBaseUrl}</p>
-        )}
-      </div>
-      <div>
-        <label className="text-sm font-medium">ANTHROPIC_API_KEY</label>
-        <p className="text-xs text-muted-foreground">Optional. Empty uses .env (not shown here). Enter a key only to override the environment.</p>
-        <Input
-          type="password"
-          autoComplete="off"
-          className="mt-1"
-          placeholder={config?.anthropicApiKeyFromEnv ? '•••••••• (configured in .env)' : undefined}
-          value={form.anthropicApiKey}
-          onChange={(e) => setForm((f) => ({ ...f, anthropicApiKey: e.target.value }))}
-        />
-        {config?.anthropicApiKeyFromEnv && (
-          <p className="text-xs text-green-600 dark:text-green-400 mt-1">API key is set via .env (masked on General tab).</p>
-        )}
-        {config?.anthropicApiKeyConfigured && !config?.anthropicApiKeyFromEnv && form.anthropicApiKey && (
-          <p className="text-xs text-muted-foreground mt-1">Override stored in database.</p>
-        )}
-      </div>
+
+      {runner === 'cursor' && (
+        <Card key="cursor-agent-settings">
+          <CardHeader><CardTitle className="text-base">Cursor settings</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">CURSOR_AGENT_MODEL</label>
+              <Input className="mt-1" value={form.cursorAgentModel} onChange={(e) => setForm((f) => ({ ...f, cursorAgentModel: e.target.value }))} />
+              {config?.cursorAgentModelFromEnv && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">Effective from .env: {config.cursorAgentModel}</p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">CURSOR_API_KEY</label>
+              <Input
+                type="password"
+                autoComplete="off"
+                className="mt-1"
+                placeholder={config?.cursorApiKeyFromEnv ? '•••••••• (from .env)' : undefined}
+                value={form.cursorApiKey}
+                onChange={(e) => setForm((f) => ({ ...f, cursorApiKey: e.target.value }))}
+              />
+              {config?.cursorApiKeyFromEnv && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">Key set in .env — enter here only to override.</p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">CURSOR_AGENT_TIMEOUT_MS</label>
+              <Input
+                type="number"
+                min={1000}
+                className="mt-1"
+                value={form.cursorAgentTimeoutMs}
+                onChange={(e) => setForm((f) => ({ ...f, cursorAgentTimeoutMs: Number(e.target.value) }))}
+              />
+              {config?.cursorAgentTimeoutMsFromEnv && (
+                <p className="text-xs text-muted-foreground mt-1">Default from .env: {config.cursorAgentTimeoutMs} ms</p>
+              )}
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">DEBUG_AGENT</p>
+                <p className="text-xs text-muted-foreground">Verbose agent logging in workers</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, debugAgent: !f.debugAgent }))}
+                className={`relative w-9 h-5 rounded-full transition-colors ${form.debugAgent ? 'bg-primary' : 'bg-muted'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${form.debugAgent ? 'translate-x-4' : ''}`} />
+              </button>
+            </div>
+            <div className="pt-2 border-t border-border space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Runs the same check as <code className="text-xs">npm run cursor-test -w apps/workers</code> (unsaved values above).
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                loading={testAgent.isPending}
+                onClick={() => {
+                  setTestResult(null);
+                  testAgent.mutate();
+                }}
+              >
+                Test Cursor connection
+              </Button>
+              {testResult?.runner === 'cursor' && (
+                <AgentTestResultPanel result={testResult} />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {runner === 'claude' && (
+        <Card key="claude-agent-settings">
+          <CardHeader><CardTitle className="text-base">Claude settings</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">CLAUDE_AGENT_MODEL</label>
+              <Input className="mt-1" value={form.claudeAgentModel} onChange={(e) => setForm((f) => ({ ...f, claudeAgentModel: e.target.value }))} />
+              {config?.claudeAgentModelFromEnv && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">Effective from .env: {config.claudeAgentModel}</p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">CLAUDE_MAX_TOKENS</label>
+              <Input
+                type="number"
+                min={1}
+                className="mt-1"
+                value={form.claudeMaxTokens}
+                onChange={(e) => setForm((f) => ({ ...f, claudeMaxTokens: Number(e.target.value) }))}
+              />
+              {config?.claudeMaxTokensFromEnv && (
+                <p className="text-xs text-muted-foreground mt-1">Default from .env: {config.claudeMaxTokens}</p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1">Legacy; not used by the Claude Agent SDK runner.</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium">CLAUDE_AGENT_MAX_TURNS</label>
+              <Input
+                type="number"
+                min={1}
+                max={500}
+                className="mt-1"
+                value={form.claudeAgentMaxTurns}
+                onChange={(e) => setForm((f) => ({ ...f, claudeAgentMaxTurns: Number(e.target.value) }))}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Max agent turns per CVE skill or exploit run. Raise this if logs show &quot;Reached maximum number of turns (50)&quot;.
+              </p>
+              {config?.claudeAgentMaxTurnsFromEnv && (
+                <p className="text-xs text-muted-foreground mt-1">Default from .env: {config.claudeAgentMaxTurns}</p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">ANTHROPIC_BASE_URL</label>
+              <Input className="mt-1" placeholder="https://openrouter.ai/api" value={form.anthropicBaseUrl} onChange={(e) => setForm((f) => ({ ...f, anthropicBaseUrl: e.target.value }))} />
+              {config?.anthropicBaseUrlFromEnv && config.anthropicBaseUrl && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">From .env: {config.anthropicBaseUrl}</p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">ANTHROPIC_API_KEY</label>
+              <Input
+                type="password"
+                autoComplete="off"
+                className="mt-1"
+                placeholder={config?.anthropicApiKeyFromEnv ? '•••••••• (from .env)' : undefined}
+                value={form.anthropicApiKey}
+                onChange={(e) => setForm((f) => ({ ...f, anthropicApiKey: e.target.value }))}
+              />
+              {config?.anthropicApiKeyFromEnv && (
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">Key set in .env — enter here only to override.</p>
+              )}
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">DEBUG_AGENT</p>
+                <p className="text-xs text-muted-foreground">Also applies to Claude agent runs in workers</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, debugAgent: !f.debugAgent }))}
+                className={`relative w-9 h-5 rounded-full transition-colors ${form.debugAgent ? 'bg-primary' : 'bg-muted'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${form.debugAgent ? 'translate-x-4' : ''}`} />
+              </button>
+            </div>
+            <div className="pt-2 border-t border-border space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Runs the same check as <code className="text-xs">npm run claude-agent-sdk-test -w apps/workers</code> (unsaved values above).
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                loading={testAgent.isPending}
+                onClick={() => {
+                  setTestResult(null);
+                  testAgent.mutate();
+                }}
+              >
+                Test Claude connection
+              </Button>
+              {testResult?.runner === 'claude' && (
+                <AgentTestResultPanel result={testResult} />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div>
         <label className="text-sm font-medium">Min Severity for Exploit Generation</label>
         <Select className="mt-1 w-full" value={form.exploitMinSeverity} onChange={(e) => setForm((f) => ({ ...f, exploitMinSeverity: e.target.value }))}>
@@ -240,7 +507,7 @@ function ScannerTab() {
         <p className="text-xs text-muted-foreground">Legacy setting — scanner workspaces are now cleaned immediately after each scan</p>
         <Input type="number" min={0} className="mt-1" value={form.workspaceCleanupHours} onChange={(e) => setForm((f) => ({ ...f, workspaceCleanupHours: Number(e.target.value) }))} />
       </div>
-      <Button loading={update.isPending} onClick={() => update.mutate(form)}>Save Settings</Button>
+      <Button loading={update.isPending} onClick={() => update.mutate()}>Save Settings</Button>
     </div>
   );
 }
@@ -261,6 +528,7 @@ function NotificationsTab() {
   const update = useMutation({
     mutationFn: (data: typeof form) => api.updateWorkerConfig(data as Record<string, unknown>),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['worker-config'] }),
+    meta: { successMessage: 'Notification settings saved' },
   });
 
   return (
@@ -293,6 +561,7 @@ function DataManagementTab() {
     onSuccess: () => {
       qc.invalidateQueries();
     },
+    meta: { successMessage: 'Data cleared successfully' },
   });
 
   return (

@@ -234,6 +234,16 @@ export const api = {
   getWorkerConfig: () => request<unknown>('/api/workers/config'),
   updateWorkerConfig: (data: Record<string, unknown>) =>
     request<unknown>('/api/workers/config', { method: 'PATCH', body: JSON.stringify(data) }),
+  testAgentConnection: (data: Record<string, unknown>) =>
+    request<{
+      ok: boolean;
+      runner: 'cursor' | 'claude';
+      model: string;
+      message: string;
+      latencyMs: number;
+      detail?: string;
+      log?: string;
+    }>('/api/workers/config/test-agent', { method: 'POST', body: JSON.stringify(data) }),
   getWorkerQueueStats: () => request<unknown>('/api/workers/queue-stats'),
   scannerPause: () => request<unknown>('/api/workers/scanner/pause', { method: 'POST' }),
   scannerResume: () => request<unknown>('/api/workers/scanner/resume', { method: 'POST' }),

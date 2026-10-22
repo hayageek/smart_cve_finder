@@ -13,6 +13,7 @@ services:
       WORKSPACES_DIR: /data/workspaces
       REPORTS_DIR: /data/atlassian_reports
       LOGS_DIR: /data/logs
+      WORKERS_AGENT_TEST_URL: http://workers:8082
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:
@@ -37,8 +38,9 @@ services:
       LOGS_DIR: /data/logs
       CURSOR_API_KEY: ${CURSOR_API_KEY}
       CURSOR_AGENT_BIN: /usr/local/bin/cursor-agent
-      DEBUG_CURSOR: ${DEBUG_CURSOR:-true}
+      DEBUG_AGENT: ${DEBUG_AGENT:-${DEBUG_CURSOR:-true}}
       SKILLS_DIR: /data/skills
+      WORKER_AGENT_TEST_PORT: ${WORKER_AGENT_TEST_PORT:-8082}
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:

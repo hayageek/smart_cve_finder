@@ -2,6 +2,9 @@
   "name": "@secscan/workers",
   "version": "1.0.0",
   "type": "module",
+  "exports": {
+    "./agent-connection-test": "./dist/agent-connection-test.js"
+  },
   "scripts": {
     "db:generate": "prisma generate --schema=../api/prisma/schema.prisma",
     "dev": "tsx watch src/index.ts",

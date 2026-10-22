@@ -12,7 +12,7 @@ import { ConfirmDialog } from '../../components/ui/Dialog.tsx';
 import { CveSkillPicker } from '../../components/CveSkillPicker.tsx';
 import { api } from '../../lib/api.ts';
 import { formatRelative, cn } from '../../lib/utils.ts';
-import type { CveHuntSkill } from '@secscan/shared';
+import { CVE_HUNT_SKILLS, type CveHuntSkill } from '@secscan/shared';
 
 type ScanMode = 'both' | 'cve' | 'secrets';
 
@@ -132,7 +132,7 @@ export default function AllRepos() {
   const [visibility, setVisibility] = useState('all');
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [bulkScanMode, setBulkScanMode] = useState<ScanMode>('both');
-  const [bulkCveSkills, setBulkCveSkills] = useState<CveHuntSkill[]>(['cve-ai-finder']);
+  const [bulkCveSkills, setBulkCveSkills] = useState<CveHuntSkill[]>([...CVE_HUNT_SKILLS]);
   const [bulkForce, setBulkForce] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ queued: number; skipped: number } | null>(null);
 

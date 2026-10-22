@@ -1,4 +1,4 @@
-import type { RegistryPackageType } from './types.js';
+import type { CveHuntSkill, RegistryPackageType, ScanMode } from './types.js';
 
 export const REGISTRY_PACKAGE_TYPES = ['npm', 'pip', 'cargo', 'go', 'gem'] as const satisfies readonly RegistryPackageType[];
 
@@ -12,6 +12,20 @@ export function parseCveSkillList(value: string | readonly string[] | null | und
   const parts = Array.isArray(value) ? value : String(value ?? '').split(',');
   const wanted = new Set(parts.map((part) => part.trim()).filter(Boolean));
   return CVE_HUNT_SKILLS.filter((skill) => wanted.has(skill));
+}
+
+/** Skills to run on import / enqueue when scan includes CVE. Default: all hunt skills. */
+export function resolveEnqueueCveSkills(
+  scanMode: ScanMode = 'both',
+  value?: string | readonly string[] | null,
+): CveHuntSkill[] | undefined {
+  if (scanMode === 'secrets') return undefined;
+  if (typeof value === 'string' && value.trim().toLowerCase() === 'all') {
+    return [...CVE_HUNT_SKILLS];
+  }
+  const parsed = parseCveSkillList(value);
+  if (parsed.length) return parsed;
+  return [...CVE_HUNT_SKILLS];
 }
 
 /** `extra.metadata.finding_origin` values the hunters emit. */

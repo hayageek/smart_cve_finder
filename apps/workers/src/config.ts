@@ -40,6 +40,8 @@ const schema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().default('openai/glm-5.2'),
   ),
+  CLAUDE_MAX_TOKENS: z.coerce.number().min(1).default(16384),
+  CLAUDE_AGENT_MAX_TURNS: z.coerce.number().min(1).default(50),
   // Optional. When empty, the Claude runner does not set ANTHROPIC_BASE_URL.
   ANTHROPIC_BASE_URL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
@@ -50,8 +52,14 @@ const schema = z.object({
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().optional(),
   ),
-  // Set to "true" to log the full prompt and result text from @cursor/sdk calls
-  DEBUG_CURSOR: z.string().transform((v) => v === 'true').default('false'),
+  // Verbose logging for Cursor + Claude agent runs. DEBUG_CURSOR is a legacy alias.
+  DEBUG_AGENT: z.preprocess(
+    (v) => {
+      if (typeof v === 'string' && v.trim() !== '') return v.trim();
+      return process.env.DEBUG_AGENT ?? process.env.DEBUG_CURSOR ?? 'false';
+    },
+    z.string().transform((val) => val === 'true').default('false'),
+  ),
   /**
    * Default CVE hunt backend when a job does not set cveSkill:
    * - ai-finder — Cursor cve-ai-finder skill only (no Semgrep)
@@ -101,6 +109,9 @@ const schema = z.object({
   SCAN_MAX_INACTIVE_YEARS: z.coerce.number().default(2),
   /** When true, skip GitHub repos without private vulnerability reporting enabled. */
   SCAN_REQUIRE_PVR: z.string().transform((v) => v === 'true').default('false'),
+  /** Internal HTTP port for Settings → Test connection (0 = disabled). */
+  WORKER_AGENT_TEST_PORT: z.coerce.number().default(8082),
+  WORKER_AGENT_TEST_TOKEN: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -93,6 +93,7 @@ export default function ScanQueue() {
   const clearFailed = useMutation({
     mutationFn: () => api.clearFailedJobs(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['failed-jobs'] }),
+    meta: { successMessage: 'Failed jobs cleared' },
   });
 
   const stats = liveStats.length > 0 ? liveStats : queueData?.stats ?? [];

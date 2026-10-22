@@ -9,8 +9,13 @@ import { scanWorker } from './scanner.worker.js';
 import { exploitWorker } from './exploit.worker.js';
 
 import { config } from './config.js';
+import { startAgentTestServer } from './agent-test-server.js';
 
 logger.info('Workers starting...');
+
+if (config.WORKER_AGENT_TEST_PORT > 0) {
+  startAgentTestServer(config.WORKER_AGENT_TEST_PORT, config.WORKER_AGENT_TEST_TOKEN);
+}
 logger.info({ pid: process.pid }, 'Worker process');
 logger.info(
   {

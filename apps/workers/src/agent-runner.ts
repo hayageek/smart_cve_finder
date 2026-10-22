@@ -16,6 +16,8 @@ export interface AgentSkillOptions extends RunSkillOptions {
   anthropicBaseUrl?: string;
   /** Passed to the Claude runner only. Omitted from the request when empty. */
   anthropicApiKey?: string;
+  /** Claude Agent SDK max turns per skill run. */
+  maxTurns?: number;
 }
 
 export async function runAgentSkill(options: AgentSkillOptions): Promise<RunSkillResult> {

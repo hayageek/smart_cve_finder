@@ -24,6 +24,7 @@ import { setMaxListeners } from 'events';
 import path from 'path';
 import { existsSync } from 'fs';
 import { Agent, CursorAgentError, type ModelSelection } from '@cursor/sdk';
+import { agentDebugEnabled } from './agent-debug.js';
 
 // @cursor/sdk attaches AbortSignal listeners for every concurrent run.
 // With multiple parallel workers the default limit of 10 is exceeded quickly.
@@ -57,7 +58,7 @@ export interface RunSkillOptions {
   onChunk?: (chunk: string) => void;
   /**
    * Enable debug logging of the full prompt and response text to stderr.
-   * Controlled by DEBUG_CURSOR=true in .env.
+   * Controlled by DEBUG_AGENT=true in .env (DEBUG_CURSOR legacy alias).
    */
   debug?: boolean;
   /** When debug is on, single-line status messages are also sent here (e.g. worker logger). */
@@ -116,7 +117,7 @@ export function buildModelSelection(modelId: string): ModelSelection {
 export async function runCursorSkill(options: RunSkillOptions): Promise<RunSkillResult> {
   const { skillPath, promptSuffix, cwd, model, onChunk } = options;
   const modelSelection = buildModelSelection(model);
-  const debug = options.debug ?? process.env.DEBUG_CURSOR === 'true';
+  const debug = agentDebugEnabled(options.debug);
   const DBG = createDbg(options.onDebug);
 
   // Resolve API key: explicit option > CURSOR_API_KEY env var

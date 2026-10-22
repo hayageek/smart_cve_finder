@@ -18,7 +18,14 @@ import { enqueueRepoRescans, enqueueScans } from '../services/scans.js';
 import { emitActivityEvent } from '../sockets/index.js';
 import { evaluateRevisionGate } from '@secscan/source-revision';
 import { config } from '../config.js';
-import { CVE_HUNT_SKILLS, parseCveSkillList, REGISTRY_PACKAGE_TYPES, type CveHuntSkill, type PackageType, type ScanMode } from '@secscan/shared';
+import {
+  CVE_HUNT_SKILLS,
+  resolveEnqueueCveSkills,
+  REGISTRY_PACKAGE_TYPES,
+  type CveHuntSkill,
+  type PackageType,
+  type ScanMode,
+} from '@secscan/shared';
 import { z } from 'zod';
 
 const router = Router();
@@ -95,9 +102,11 @@ const cveSkillsSchema = z.union([
   z.string().min(1),
 ]).optional();
 
-function selectedCveSkills(body: { cveSkill?: string; cveSkills?: string | CveHuntSkill[] }): CveHuntSkill[] | undefined {
-  const parsed = parseCveSkillList(body.cveSkills ?? body.cveSkill);
-  return parsed.length ? parsed : undefined;
+function selectedCveSkills(
+  scanMode: ScanMode,
+  body: { cveSkill?: string; cveSkills?: string | CveHuntSkill[] },
+): CveHuntSkill[] | undefined {
+  return resolveEnqueueCveSkills(scanMode, body.cveSkills ?? body.cveSkill);
 }
 
 router.post('/import/manual', async (req, res) => {
@@ -109,9 +118,10 @@ router.post('/import/manual', async (req, res) => {
       cveSkills: cveSkillsSchema,
       force: z.boolean().optional(),
     }).parse(req.body);
+    const scanMode = body.scanMode ?? 'both';
     const result = await enqueueScans(body.targets, {
-      scanMode: body.scanMode,
-      cveSkills: selectedCveSkills(body),
+      scanMode,
+      cveSkills: selectedCveSkills(scanMode, body),
       force: body.force,
     });
     res.json({ queued: result.queued, skipped: result.skipped, results: result.results });
@@ -157,7 +167,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
 
     const result = await enqueueScans(unique.map(parsedEntryToScanTarget), {
       scanMode,
-      cveSkills: selectedCveSkills(importBody),
+      cveSkills: selectedCveSkills(scanMode, importBody),
       force: importBody.force,
     });
     console.info(
@@ -269,9 +279,10 @@ router.post('/rescan', async (req, res) => {
       force: z.boolean().optional(),
     }).parse(req.body);
 
+    const scanMode = body.scanMode ?? 'both';
     const result = await enqueueRepoRescans(body.ids, {
-      scanMode: body.scanMode,
-      cveSkills: selectedCveSkills(body),
+      scanMode,
+      cveSkills: selectedCveSkills(scanMode, body),
       force: body.force,
     });
 
@@ -325,9 +336,10 @@ router.post('/rescan-all', async (req, res) => {
       orderBy: { createdAt: 'desc' },
     });
 
+    const scanMode = body.scanMode ?? 'both';
     const result = await enqueueRepoRescans(
       repos.map((r) => r.id),
-      { scanMode: body.scanMode, cveSkills: selectedCveSkills(body), force: body.force },
+      { scanMode, cveSkills: selectedCveSkills(scanMode, body), force: body.force },
     );
 
     console.info(
@@ -408,7 +420,7 @@ router.post('/:id/rescan', async (req, res) => {
       }
     }
 
-    const skill = cveSkillJobFields(scanMode === 'secrets' ? undefined : selectedCveSkills(body));
+    const skill = cveSkillJobFields(scanMode === 'secrets' ? undefined : selectedCveSkills(scanMode, body));
     const scanJob = await prisma.scanJob.create({
       data: { repoId: repo.id, status: 'pending', scanMode, cveSkill: skill.stored },
     });

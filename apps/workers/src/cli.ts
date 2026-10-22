@@ -180,7 +180,7 @@ const opts = {
   keep:         hasFlag('--keep'),
   noExploit:    hasFlag('--no-exploit'),
   gateOnly:     hasFlag('--gate-only') || process.env.SECRET_GATE_ONLY === 'true',
-  debug:        hasFlag('--debug') || process.env.DEBUG_CURSOR === 'true',
+  debug:        hasFlag('--debug') || process.env.DEBUG_AGENT === 'true' || process.env.DEBUG_CURSOR === 'true',
   gitleaksBin:  getFlag('--gitleaks-bin') ?? process.env.SECRET_GITLEAKS_BIN ?? 'gitleaks',
   trufflehogBin: getFlag('--trufflehog-bin') ?? process.env.SECRET_TRUFFLEHOG_BIN ?? 'trufflehog',
   secretMinSeverity: (getFlag('--secret-min-severity') ?? process.env.SECRET_MIN_SEVERITY ?? 'MEDIUM') as

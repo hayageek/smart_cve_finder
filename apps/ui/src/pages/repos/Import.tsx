@@ -9,8 +9,9 @@ import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { CveSkillPicker } from '../../components/CveSkillPicker.tsx';
 import { api } from '../../lib/api.ts';
+import { useToast } from '../../components/ui/Toast.tsx';
 import { cn } from '../../lib/utils.ts';
-import type { CveHuntSkill } from '@secscan/shared';
+import { CVE_HUNT_SKILLS, type CveHuntSkill } from '@secscan/shared';
 
 type PackageType = 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'gem';
 type ScanMode = 'both' | 'cve' | 'secrets';
@@ -116,6 +117,7 @@ function PreviewList({ rows }: { rows: PreviewRow[] }) {
 }
 
 export default function Import() {
+  const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<PreviewResult | null>(null);
   const [manualEntries, setManualEntries] = useState<ManualEntry[]>([]);
@@ -132,7 +134,7 @@ export default function Import() {
   const [entryVersion, setEntryVersion] = useState('');
   const [entryPrivate, setEntryPrivate] = useState(false);
   const [scanMode, setScanMode] = useState<ScanMode>('both');
-  const [cveSkills, setCveSkills] = useState<CveHuntSkill[]>(['cve-ai-finder']);
+  const [cveSkills, setCveSkills] = useState<CveHuntSkill[]>([...CVE_HUNT_SKILLS]);
   const [forceRescan, setForceRescan] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -245,8 +247,11 @@ export default function Import() {
       setFile(null);
       setFilePreview(null);
       qc.invalidateQueries({ queryKey: ['repos'] });
+      toast.success('Import queued', `${queued} scan job(s) queued${skipped ? `, ${skipped} skipped` : ''}`);
     } catch (err) {
-      setError(String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      toast.error('Import failed', msg);
     } finally {
       setImporting(false);
     }

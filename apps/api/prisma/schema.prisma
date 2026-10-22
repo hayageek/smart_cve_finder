@@ -170,5 +170,12 @@ model WorkerConfig {
   claudeAgentModel      String?
   anthropicBaseUrl      String?
   anthropicApiKey       String?
+  cursorAgentModel      String?
+  cursorApiKey          String?
+  cursorAgentTimeoutMs  Int?
+  debugAgent            Boolean?
+  claudeMaxTokens       Int?
+  // null → CLAUDE_AGENT_MAX_TURNS env (default 50)
+  claudeAgentMaxTurns   Int?
   updatedAt             DateTime @updatedAt
 }

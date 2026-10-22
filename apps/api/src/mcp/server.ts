@@ -16,6 +16,7 @@ import {
   getScanQueueOverview,
   getScanStatus,
 } from '../services/scans.js';
+import { CVE_HUNT_SKILLS, resolveEnqueueCveSkills, type ScanMode } from '@secscan/shared';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer(
@@ -32,7 +33,7 @@ export function createMcpServer(): McpServer {
         'Use sast_save_finding_artifacts with full file TEXT (not host paths). Prefer report_md_base64 for large files.',
         'Files are written under REPORTS_DIR on the API server (Docker volume), not on your laptop path.',
         'Use sast_set_finding_exploitable after analysis (maps to exploitStatus done/failed).',
-        'Use sast_enqueue_scan to add git repos or registry packages (npm, pip, cargo, go, gem) to the scanner queue (same rules as CSV import).',
+        'Use sast_enqueue_scan to add git repos or registry packages (npm, pip, cargo, go, gem) to the scanner queue (same rules as CSV import). Default scan_type=both and all CVE skills unless narrowed.',
         'Use sast_get_scan_status to check repo/scan job progress by repo_id, repo_url, or scan_job_id.',
         'Use sast_get_scan_queue_stats for BullMQ queue depths and pending DB scan jobs.',
       ].join(' '),
@@ -180,6 +181,13 @@ export function createMcpServer(): McpServer {
     is_private: z.boolean().optional().describe('For git repos only — mark as private/internal'),
   });
 
+  const cveSkillsMcpSchema = z
+    .union([z.array(z.enum(CVE_HUNT_SKILLS)).min(1), z.string().min(1)])
+    .optional()
+    .describe(
+      'CVE hunt skills: omit or "all" for every skill (cve-ai-finder, cve-variant-hunter, sbom-vuln-mapper). Comma-separated string also accepted. Ignored when scan_type=secrets.',
+    );
+
   server.tool(
     'sast_enqueue_scan',
     'Add one or more git repos or registry packages to the scanner queue. Deduplicates by canonical key. Skips already-scanned repos unless force=true.',
@@ -188,14 +196,23 @@ export function createMcpServer(): McpServer {
         .array(scanTargetSchema)
         .min(1)
         .describe('List of repos/packages to queue (same format as CSV import)'),
+      scan_type: z
+        .enum(['both', 'cve', 'secrets'])
+        .optional()
+        .default('both')
+        .describe('Scan type: both (CVE + secrets), cve only, or secrets only'),
+      cve_skills: cveSkillsMcpSchema,
       force: z
         .boolean()
         .optional()
         .default(false)
         .describe('Re-scan repos that were already scanned (status done/skipped)'),
     },
-    async ({ targets, force }) => {
+    async ({ targets, scan_type, cve_skills, force }) => {
       try {
+        const scanMode = scan_type as ScanMode;
+        const cveSkills = resolveEnqueueCveSkills(scanMode, cve_skills);
+
         const parsedTargets = targets.map((t) => {
           if (t.git_url) {
             return { gitUrl: t.git_url, isPrivate: t.is_private };
@@ -210,7 +227,7 @@ export function createMcpServer(): McpServer {
           return { gitUrl: '' };
         });
 
-        const result = await enqueueScans(parsedTargets, { force });
+        const result = await enqueueScans(parsedTargets, { force, scanMode, cveSkills });
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };

@@ -11,12 +11,15 @@ import { existsSync } from 'fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { CanUseTool, PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import type { RunSkillOptions, RunSkillResult } from './cursor-runner.js';
+import { agentDebugEnabled } from './agent-debug.js';
 
 export interface ClaudeSkillOptions extends RunSkillOptions {
   /** Proxy base URL (Anthropic-compatible, e.g. https://openrouter.ai/api). */
   anthropicBaseUrl?: string;
   /** API key for the proxy or Anthropic. */
   anthropicApiKey?: string;
+  /** Agent SDK max turns; falls back to CLAUDE_AGENT_MAX_TURNS env (default 50). */
+  maxTurns?: number;
 }
 
 /** @deprecated Agent SDK uses turns; kept for claude-agent-test-cli compatibility. */
@@ -30,7 +33,7 @@ export function claudeAgentMaxTurns(): number {
   const raw = process.env.CLAUDE_AGENT_MAX_TURNS?.trim();
   if (!raw) return 50;
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 50;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 100;
 }
 
 /**
@@ -94,11 +97,14 @@ function appendAssistantText(message: StreamMessage, onChunk?: (chunk: string) =
 
 export async function runClaudeSkill(options: ClaudeSkillOptions): Promise<RunSkillResult> {
   const { skillPath, promptSuffix, cwd, model, onChunk } = options;
-  const debug = options.debug ?? process.env.DEBUG_CURSOR === 'true';
+  const debug = agentDebugEnabled(options.debug);
   const baseUrl = options.anthropicBaseUrl?.trim() || undefined;
   const apiKey = options.anthropicApiKey?.trim() || undefined;
   const prompt = promptSuffix ? `${skillPath}\n${promptSuffix}` : skillPath;
-  const maxTurns = claudeAgentMaxTurns();
+  const maxTurns =
+    options.maxTurns != null && Number.isFinite(options.maxTurns) && options.maxTurns > 0
+      ? Math.floor(options.maxTurns)
+      : claudeAgentMaxTurns();
 
   const cwdInfo =
     `[claude-runner] agent-sdk cwd = ${cwd} ` +

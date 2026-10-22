@@ -8,16 +8,27 @@ import { config } from '../config.js';
 import { scanQueue, exploitQueue, getQueueStats } from '../queues/index.js';
 import { emitQueueStats } from '../sockets/index.js';
 import { readWorkerLogTail } from '../lib/parseWorkerLogs.js';
+import { testAgentConnection } from '../lib/test-agent-connection.js';
 
 const router = Router();
 
 function agentEnvDefaults() {
+  const debugRaw = (process.env.DEBUG_AGENT ?? process.env.DEBUG_CURSOR)?.trim().toLowerCase();
   return {
     runner: process.env.AGENT_RUNNER,
     claudeModel: process.env.CLAUDE_AGENT_MODEL,
-    cursorModel: process.env.CURSOR_AGENT_MODEL ?? 'claude-sonnet-4-5',
+    cursorModel: process.env.CURSOR_AGENT_MODEL ?? 'composer-2.5',
     baseUrl: process.env.ANTHROPIC_BASE_URL,
     apiKey: process.env.ANTHROPIC_API_KEY,
+    cursorApiKey: process.env.CURSOR_API_KEY,
+    cursorAgentTimeoutMs: process.env.CURSOR_AGENT_TIMEOUT_MS
+      ? Number(process.env.CURSOR_AGENT_TIMEOUT_MS)
+      : undefined,
+    debugAgent: debugRaw === 'true' ? true : debugRaw === 'false' ? false : undefined,
+    claudeMaxTokens: process.env.CLAUDE_MAX_TOKENS ? Number(process.env.CLAUDE_MAX_TOKENS) : undefined,
+    claudeAgentMaxTurns: process.env.CLAUDE_AGENT_MAX_TURNS
+      ? Number(process.env.CLAUDE_AGENT_MAX_TURNS)
+      : undefined,
   };
 }
 
@@ -52,6 +63,34 @@ const configSchema = z.object({
   claudeAgentModel: z.string().optional(),
   anthropicBaseUrl: z.string().optional(),
   anthropicApiKey: z.string().optional(),
+  cursorAgentModel: z.string().optional(),
+  cursorApiKey: z.string().optional(),
+  cursorAgentTimeoutMs: z.coerce.number().min(1000).nullable().optional(),
+  debugAgent: z.boolean().nullable().optional(),
+  claudeMaxTokens: z.coerce.number().min(1).nullable().optional(),
+  claudeAgentMaxTurns: z.coerce.number().min(1).max(500).nullable().optional(),
+});
+
+const testAgentSchema = z.object({
+  agentRunner: z.enum(['cursor', 'claude']).optional(),
+  claudeAgentModel: z.string().optional(),
+  anthropicBaseUrl: z.string().optional(),
+  anthropicApiKey: z.string().optional(),
+  cursorAgentModel: z.string().optional(),
+  cursorApiKey: z.string().optional(),
+  cursorAgentTimeoutMs: z.coerce.number().min(1000).nullable().optional(),
+  debugAgent: z.boolean().nullable().optional(),
+  claudeMaxTokens: z.coerce.number().min(1).nullable().optional(),
+});
+
+router.post('/config/test-agent', async (req, res) => {
+  try {
+    const body = testAgentSchema.parse(req.body ?? {});
+    const result = await testAgentConnection(body);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 router.patch('/config', async (req, res) => {
@@ -60,6 +99,8 @@ router.patch('/config', async (req, res) => {
     if (data.claudeAgentModel !== undefined) data.claudeAgentModel = nullIfBlank(data.claudeAgentModel) as string | undefined;
     if (data.anthropicBaseUrl !== undefined) data.anthropicBaseUrl = nullIfBlank(data.anthropicBaseUrl) as string | undefined;
     if (data.anthropicApiKey !== undefined) data.anthropicApiKey = nullIfBlank(data.anthropicApiKey) as string | undefined;
+    if (data.cursorAgentModel !== undefined) data.cursorAgentModel = nullIfBlank(data.cursorAgentModel) as string | undefined;
+    if (data.cursorApiKey !== undefined) data.cursorApiKey = nullIfBlank(data.cursorApiKey) as string | undefined;
     const cfg = await prisma.workerConfig.findFirst();
     if (!cfg) return res.status(404).json({ error: 'Config not found' });
 

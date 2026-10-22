@@ -2,20 +2,17 @@ FROM node:24-alpine AS base
 WORKDIR /app
 RUN apk add --no-cache git openssl
 
-# Install deps
-COPY package.json tsconfig.base.json ./
+COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/source-revision/package.json ./packages/source-revision/
 COPY apps/api/package.json ./apps/api/
-RUN npm install --workspaces --if-present
+RUN npm ci --workspaces --if-present
 
-# Build shared
 COPY packages/shared ./packages/shared
 COPY packages/source-revision ./packages/source-revision
 RUN npm run build --workspace=packages/shared
 RUN npm run build --workspace=packages/source-revision
 
-# Build API
 COPY apps/api ./apps/api
 RUN npm exec -- prisma generate --schema=apps/api/prisma/schema.prisma
 RUN npm run build --workspace=apps/api

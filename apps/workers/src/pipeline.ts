@@ -1034,7 +1034,7 @@ export const EMPTY_CVE_SCAN_OUTPUT =
 
 type AgentRunFields = Pick<
   AgentSkillOptions,
-  'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk' | 'runner' | 'anthropicBaseUrl' | 'anthropicApiKey'
+  'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk' | 'runner' | 'anthropicBaseUrl' | 'anthropicApiKey' | 'maxTurns'
 >;
 
 function skillFields(opts: AgentRunFields, log: PipelineLogger): AgentRunFields & {
@@ -1049,6 +1049,7 @@ function skillFields(opts: AgentRunFields, log: PipelineLogger): AgentRunFields 
     runner: opts.runner,
     anthropicBaseUrl: opts.anthropicBaseUrl,
     anthropicApiKey: opts.anthropicApiKey,
+    maxTurns: opts.maxTurns,
     onDebug: (msg) => log.info(`[agent] ${msg}`),
   };
 }
