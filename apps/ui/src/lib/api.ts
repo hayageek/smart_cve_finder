@@ -51,36 +51,39 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(target),
     }),
-  importManual: (targets: Record<string, unknown>[], options?: { scanMode?: string; force?: boolean }) =>
+  importManual: (targets: Record<string, unknown>[], options?: { scanMode?: string; force?: boolean; cveSkills?: string[] }) =>
     request<{ queued: number; skipped: number }>('/api/repos/import/manual', {
       method: 'POST',
       body: JSON.stringify({
         targets,
         scanMode: options?.scanMode,
+        cveSkills: options?.cveSkills,
         force: options?.force,
       }),
     }),
-  importRepos: (file: File, options?: { scanMode?: string; force?: boolean }) => {
+  importRepos: (file: File, options?: { scanMode?: string; force?: boolean; cveSkills?: string[] }) => {
     const form = new FormData();
     form.append('file', file);
     if (options?.scanMode) form.append('scanMode', options.scanMode);
+    if (options?.cveSkills?.length) form.append('cveSkills', options.cveSkills.join(','));
     if (options?.force) form.append('force', 'true');
     return fetch(`${BASE}/api/repos/import`, { method: 'POST', body: form }).then((r) => r.json());
   },
   getRepos: (params: Record<string, unknown>) =>
     request<unknown>(`/api/repos?${new URLSearchParams(params as Record<string, string>)}`),
-  rescanRepo: (id: string, options?: { scanMode?: string; force?: boolean }) =>
+  rescanRepo: (id: string, options?: { scanMode?: string; force?: boolean; cveSkills?: string[] }) =>
     request<unknown>(`/api/repos/${id}/rescan`, {
       method: 'POST',
       body: JSON.stringify(options ?? {}),
     }),
-  rescanReposBulk: (ids: string[], options?: { scanMode?: string; force?: boolean }) =>
+  rescanReposBulk: (ids: string[], options?: { scanMode?: string; force?: boolean; cveSkills?: string[] }) =>
     request<{ total: number; queued: number; skipped: number }>('/api/repos/rescan', {
       method: 'POST',
-      body: JSON.stringify({ ids, scanMode: options?.scanMode, force: options?.force }),
+      body: JSON.stringify({ ids, scanMode: options?.scanMode, cveSkills: options?.cveSkills, force: options?.force }),
     }),
   rescanAllRepos: (options?: {
     scanMode?: string;
+    cveSkills?: string[];
     force?: boolean;
     useFilters?: boolean;
     search?: string;
@@ -117,8 +120,11 @@ export const api = {
     request<unknown>(`/api/vulnerabilities/${id}/false-positive`, { method: 'PATCH', body: JSON.stringify({ value }) }),
   setCveReported: (id: string, value: boolean) =>
     request<unknown>(`/api/vulnerabilities/${id}/cve-reported`, { method: 'PATCH', body: JSON.stringify({ value }) }),
-  generateExploit: (id: string) =>
-    request<unknown>(`/api/vulnerabilities/${id}/generate-exploit`, { method: 'POST' }),
+  generateExploit: (id: string, options?: { force?: boolean }) =>
+    request<unknown>(`/api/vulnerabilities/${id}/generate-exploit`, {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
+    }),
   bulkExploit: (body: { vulnIds: string[]; onlyNew?: boolean }) =>
     request<{ queued: number }>('/api/vulnerabilities/bulk-exploit', { method: 'POST', body: JSON.stringify(body) }),
   deleteVulnerability: (id: string) =>
@@ -215,7 +221,14 @@ export const api = {
   downloadExploit: (id: string) => requestBlob(`/api/exploits/${id}/download`),
   downloadExploitFile: (id: string, filename: string) => requestBlob(`/api/exploits/${id}/files/${filename}`),
   getExploitReport: (id: string) => request<{ content: string }>(`/api/exploits/${id}/report`),
-  clearExploits: () => request<unknown>('/api/exploits', { method: 'DELETE' }),
+  clearExploits: () => request<{ ok: boolean; cleared: number }>('/api/exploits', { method: 'DELETE' }),
+  deleteExploit: (id: string) =>
+    request<{ ok: boolean; cleared: number }>(`/api/exploits/${id}`, { method: 'DELETE' }),
+  deleteExploitsBulk: (ids: string[]) =>
+    request<{ ok: boolean; cleared: number }>('/api/exploits/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
+    }),
 
   // Workers
   getWorkerConfig: () => request<unknown>('/api/workers/config'),

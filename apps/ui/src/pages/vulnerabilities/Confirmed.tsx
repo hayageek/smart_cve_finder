@@ -15,7 +15,8 @@ import { ReportViewerModal } from '../../components/ReportViewerModal.tsx';
 import { ExploitArtifactDownloads, ExploitArtifactFileList } from '../../components/ExploitArtifactDownloads.tsx';
 import { Tooltip } from '../../components/ui/Tooltip.tsx';
 import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.ts';
-import type { ApiVulnerability } from '@secscan/shared';
+import { FINDING_ORIGINS, type ApiVulnerability } from '@secscan/shared';
+import { FindingOriginBadge, FindingSkillSections, findingOriginLabel } from '../../components/FindingSkillMeta.tsx';
 
 function CveReportedCell({
   vuln,
@@ -100,7 +101,7 @@ function VulnDetail({
   });
 
   const exploitMutation = useMutation({
-    mutationFn: () => api.generateExploit(vuln.id),
+    mutationFn: (force?: boolean) => api.generateExploit(vuln.id, force ? { force: true } : undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vulns'] });
       qc.invalidateQueries({ queryKey: ['exploit-artifacts', vuln.id] });
@@ -161,6 +162,7 @@ function VulnDetail({
           <span className="font-mono text-xs text-muted-foreground">{vuln.cwe}</span>
           {vuln.isFalsePositive && <Badge variant="secondary">False Positive</Badge>}
           {vuln.cveReported && <Badge variant="default">CVE Reported</Badge>}
+          <FindingOriginBadge metadataJson={vuln.metadataJson} />
           {vuln.cvssScore !== null && (
             <Badge variant="outline">CVSS {vuln.cvssScore}</Badge>
           )}
@@ -230,6 +232,7 @@ function VulnDetail({
           <p className="text-xs text-muted-foreground">Message</p>
           <p className="text-xs">{vuln.message}</p>
         </div>
+        <FindingSkillSections metadataJson={vuln.metadataJson} />
         {(vuln.dropReason || vuln.dropEvidence) && (
           <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-2">
             <p className="text-xs font-medium text-muted-foreground">Drop info</p>
@@ -310,14 +313,44 @@ function VulnDetail({
             </div>
           )}
           {vuln.exploitStatus !== 'done' && vuln.exploitStatus !== 'generating' && vuln.exploitStatus !== 'pending' ? (
-            <Button size="sm" className="w-full" loading={exploitMutation.isPending} onClick={() => exploitMutation.mutate()}>
+            <Button size="sm" className="w-full" loading={exploitMutation.isPending} onClick={() => exploitMutation.mutate(undefined)}>
               <Zap className="w-3.5 h-3.5" /> Generate Exploit
             </Button>
           ) : vuln.exploitStatus === 'pending' || vuln.exploitStatus === 'generating' ? (
-            <p className="text-xs text-muted-foreground">Exploit generation in progress…</p>
-          ) : !showExploitArtifacts ? (
-            <p className="text-xs text-muted-foreground">Exploit finished — no artifact files on disk.</p>
-          ) : null}
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Exploit generation in progress…</p>
+              <ConfirmDialog
+                title="Force re-queue exploit"
+                description="Queue another exploit job even though one is already pending or running. You may get duplicate work in the queue."
+                confirmText="Force queue"
+                onConfirm={async () => { await exploitMutation.mutateAsync(true); }}
+              >
+                {(open) => (
+                  <Button size="sm" variant="outline" className="w-full" loading={exploitMutation.isPending} onClick={open}>
+                    <Zap className="w-3.5 h-3.5" /> Force re-queue
+                  </Button>
+                )}
+              </ConfirmDialog>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {!showExploitArtifacts && (
+                <p className="text-xs text-muted-foreground">Exploit finished — no artifact files on disk.</p>
+              )}
+              <ConfirmDialog
+                title="Force re-queue exploit"
+                description="Run exploit generation again for this finding, even though a result already exists. Existing artifacts may be overwritten."
+                confirmText="Force queue"
+                onConfirm={async () => { await exploitMutation.mutateAsync(true); }}
+              >
+                {(open) => (
+                  <Button size="sm" variant="outline" className="w-full" loading={exploitMutation.isPending} onClick={open}>
+                    <Zap className="w-3.5 h-3.5" /> Force re-queue exploit
+                  </Button>
+                )}
+              </ConfirmDialog>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">False Positive</span>
             <button
@@ -395,6 +428,7 @@ export default function Confirmed() {
   const [sortBy, setSortBy] = useState<VulnSortBy>('createdAt');
   const [sortDir, setSortDir] = useState<VulnSortDir>('desc');
   const [search, setSearch] = useState('');
+  const [findingOrigin, setFindingOrigin] = useState('');
   const [selected, setSelected] = useState<ApiVulnerability | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
@@ -402,7 +436,7 @@ export default function Confirmed() {
   const selectedCount = selectedIds.length;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, pvrFilter, cveReportedFilter, sortBy, sortDir, search],
+    queryKey: ['vulns', page, pageSize, severity, exploitFilter, fpFilter, cwe, vulnType, pvrFilter, cveReportedFilter, sortBy, sortDir, search, findingOrigin],
     queryFn: () => api.getVulnerabilities({
       page,
       pageSize,
@@ -410,6 +444,7 @@ export default function Confirmed() {
       repoUrl: search,
       sortBy,
       sortDir,
+      ...(findingOrigin ? { findingOrigin } : {}),
       ...(exploitFilter ? { exploitStatus: exploitFilter } : {}),
       ...(fpFilter ? { falsePositive: fpFilter } : {}),
       ...(cveReportedFilter ? { cveReported: cveReportedFilter } : {}),
@@ -421,7 +456,7 @@ export default function Confirmed() {
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
 
   const bulkExploitMutation = useMutation({
-    mutationFn: () => api.bulkExploit({ vulnIds: selectedIds, onlyNew: true }),
+    mutationFn: (onlyNew: boolean) => api.bulkExploit({ vulnIds: selectedIds, onlyNew }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['vulns'] });
       setRowSelection({});
@@ -445,6 +480,14 @@ export default function Confirmed() {
       return v.exploitStatus !== null
         || (v.artifactFiles?.length ?? 0) > 0
         || !!(v.reportPath || v.exploitPath || v.payloadPath);
+    });
+  }, [data?.data, selectedIds]);
+
+  const selectedHasExistingExploit = useMemo(() => {
+    const rows = data?.data ?? [];
+    return selectedIds.some((id) => {
+      const v = rows.find((r) => r.id === id);
+      return v != null && v.exploitStatus !== null;
     });
   }, [data?.data, selectedIds]);
 
@@ -510,6 +553,16 @@ export default function Confirmed() {
     { header: 'Severity', cell: ({ row }) => <SeverityBadge severity={row.original.severity} /> },
     { header: 'CWE', cell: ({ row }) => <span className="font-mono text-xs">{row.original.cwe}</span> },
     { header: 'Type', cell: ({ row }) => <span className="text-xs">{row.original.vulnType}</span> },
+    {
+      header: 'Origin',
+      cell: ({ row }) => (
+        <span className="text-xs whitespace-nowrap">{findingOriginLabel(
+          typeof row.original.metadataJson?.finding_origin === 'string'
+            ? row.original.metadataJson.finding_origin
+            : null,
+        )}</span>
+      ),
+    },
     { header: 'File:Line', cell: ({ row }) => (
       <span
         className="font-mono text-xs block max-w-md truncate"
@@ -550,6 +603,12 @@ export default function Confirmed() {
           <Input placeholder="Repo…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="h-8 text-xs max-w-[9rem] shrink-0" />
           <Input placeholder="CWE…" value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="h-8 text-xs max-w-[5.5rem] shrink-0" />
           <Input placeholder="Type…" value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="h-8 text-xs max-w-[5.5rem] shrink-0" />
+          <Select density="compact" value={findingOrigin} onChange={(e) => { setFindingOrigin(e.target.value); setPage(1); }} title="Finding origin" className="max-w-[7.5rem]">
+            <option value="">Origin</option>
+            {FINDING_ORIGINS.map((origin) => (
+              <option key={origin} value={origin}>{findingOriginLabel(origin)}</option>
+            ))}
+          </Select>
           <Select density="compact" value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }} title="Severity">
             <option value="">Severity</option>
             {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => <option key={s} value={s}>{s}</option>)}
@@ -608,11 +667,35 @@ export default function Confirmed() {
               <Button
                 size="sm"
                 loading={bulkExploitMutation.isPending}
-                onClick={() => bulkExploitMutation.mutate()}
+                onClick={() => bulkExploitMutation.mutate(true)}
+                title="Only findings with no exploit run yet"
               >
                 <Zap className="w-3.5 h-3.5" />
-                Queue for Exploit
+                Queue new
               </Button>
+              <ConfirmDialog
+                title="Force queue exploits"
+                description={
+                  selectedHasExistingExploit
+                    ? `Re-queue exploit generation for ${selectedCount} selected ${selectedCount === 1 ? 'finding' : 'findings'}, including those that already have an exploit status. Existing artifacts may be overwritten and duplicate jobs may run.`
+                    : `Queue exploit generation for ${selectedCount} selected ${selectedCount === 1 ? 'finding' : 'findings'}.`
+                }
+                confirmText="Force queue"
+                onConfirm={async () => { await bulkExploitMutation.mutateAsync(false); }}
+              >
+                {(open) => (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    loading={bulkExploitMutation.isPending}
+                    onClick={open}
+                    title="Re-queue even when an exploit already exists"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    Force queue
+                  </Button>
+                )}
+              </ConfirmDialog>
               <ConfirmDialog
                 title="Delete Selected Vulnerabilities"
                 description={

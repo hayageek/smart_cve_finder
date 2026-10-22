@@ -8,7 +8,7 @@ import { Select } from '../components/ui/Select.tsx';
 import { Tabs } from '../components/ui/Tabs.tsx';
 import { ConfirmDialog } from '../components/ui/Dialog.tsx';
 import { api, type McpConfigResponse } from '../lib/api.ts';
-import type { WorkerConfig } from '@secscan/shared';
+import type { WorkerConfigView } from '@secscan/shared';
 
 const CLEAR_TARGETS = [
   { key: 'queue-scan', label: 'Scan Queue (repo-scan-queue)', color: 'outline' },
@@ -117,7 +117,10 @@ function GeneralTab() {
   const { data: env } = useQuery({ queryKey: ['env-config'], queryFn: () => api.getEnvConfig() });
   return (
     <div>
-      <p className="text-sm text-muted-foreground mb-3">Active environment variables. Sensitive values are masked.</p>
+      <p className="text-sm text-muted-foreground mb-3">
+        Environment variables visible to the <strong>API</strong> process (same <code className="text-xs">.env</code> as Docker Compose when using containers).
+        Restart the API after changing <code className="text-xs">.env</code>. Sensitive values are masked.
+      </p>
       <div className="rounded-md border border-border overflow-hidden">
         {env && Object.entries(env).map(([k, v]) => (
           <div key={k} className="flex items-start gap-4 px-3 py-2 border-b border-border last:border-0 hover:bg-accent/30">
@@ -132,8 +135,17 @@ function GeneralTab() {
 
 function ScannerTab() {
   const qc = useQueryClient();
-  const { data: config } = useQuery({ queryKey: ['worker-config'], queryFn: () => api.getWorkerConfig() as Promise<WorkerConfig> });
-  const [form, setForm] = useState({ exploitMinSeverity: 'HIGH', exploitIncludeDropped: false, dedupWindowHours: 24, workspaceCleanupHours: 48 });
+  const { data: config } = useQuery({ queryKey: ['worker-config'], queryFn: () => api.getWorkerConfig() as Promise<WorkerConfigView> });
+  const [form, setForm] = useState({
+    exploitMinSeverity: 'HIGH',
+    exploitIncludeDropped: false,
+    dedupWindowHours: 24,
+    workspaceCleanupHours: 48,
+    agentRunner: 'cursor',
+    claudeAgentModel: 'openai/glm-5.2',
+    anthropicBaseUrl: '',
+    anthropicApiKey: '',
+  });
 
   useEffect(() => {
     if (config) setForm({
@@ -141,6 +153,10 @@ function ScannerTab() {
       exploitIncludeDropped: config.exploitIncludeDropped,
       dedupWindowHours: config.dedupWindowHours,
       workspaceCleanupHours: config.workspaceCleanupHours,
+      agentRunner: config.agentRunner === 'claude' ? 'claude' : 'cursor',
+      claudeAgentModel: config.claudeAgentModel || 'openai/glm-5.2',
+      anthropicBaseUrl: config.anthropicBaseUrl ?? '',
+      anthropicApiKey: config.anthropicApiKey ?? '',
     });
   }, [config]);
 
@@ -150,7 +166,52 @@ function ScannerTab() {
   });
 
   return (
-    <div className="space-y-4 max-w-sm">
+    <div className="space-y-4 max-w-lg">
+      <div>
+        <label className="text-sm font-medium">Agent runner</label>
+        <p className="text-xs text-muted-foreground">Cursor uses CURSOR_API_KEY. Claude uses ANTHROPIC_* below. Empty fields use <code className="text-xs">AGENT_RUNNER</code> from .env.</p>
+        <Select className="mt-1 w-full" value={form.agentRunner} onChange={(e) => setForm((f) => ({ ...f, agentRunner: e.target.value }))}>
+          <option value="cursor">cursor</option>
+          <option value="claude">claude</option>
+        </Select>
+        {config?.agentRunnerFromEnv && (
+          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Effective runner from .env: {config.agentRunner}</p>
+        )}
+      </div>
+      <div>
+        <label className="text-sm font-medium">Claude model</label>
+        <p className="text-xs text-muted-foreground">Model id when runner is Claude. Empty uses <code className="text-xs">CLAUDE_AGENT_MODEL</code> from .env.</p>
+        <Input className="mt-1" value={form.claudeAgentModel} onChange={(e) => setForm((f) => ({ ...f, claudeAgentModel: e.target.value }))} />
+        {config?.claudeAgentModelFromEnv && (
+          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Effective model from .env: {config.claudeAgentModel}</p>
+        )}
+      </div>
+      <div>
+        <label className="text-sm font-medium">ANTHROPIC_BASE_URL</label>
+        <p className="text-xs text-muted-foreground">Optional. Empty uses .env. Save a value here to override the environment.</p>
+        <Input className="mt-1" placeholder="http://localhost:4000" value={form.anthropicBaseUrl} onChange={(e) => setForm((f) => ({ ...f, anthropicBaseUrl: e.target.value }))} />
+        {config?.anthropicBaseUrlFromEnv && config.anthropicBaseUrl && (
+          <p className="text-xs text-green-600 dark:text-green-400 mt-1">Using from .env: {config.anthropicBaseUrl}</p>
+        )}
+      </div>
+      <div>
+        <label className="text-sm font-medium">ANTHROPIC_API_KEY</label>
+        <p className="text-xs text-muted-foreground">Optional. Empty uses .env (not shown here). Enter a key only to override the environment.</p>
+        <Input
+          type="password"
+          autoComplete="off"
+          className="mt-1"
+          placeholder={config?.anthropicApiKeyFromEnv ? '•••••••• (configured in .env)' : undefined}
+          value={form.anthropicApiKey}
+          onChange={(e) => setForm((f) => ({ ...f, anthropicApiKey: e.target.value }))}
+        />
+        {config?.anthropicApiKeyFromEnv && (
+          <p className="text-xs text-green-600 dark:text-green-400 mt-1">API key is set via .env (masked on General tab).</p>
+        )}
+        {config?.anthropicApiKeyConfigured && !config?.anthropicApiKeyFromEnv && form.anthropicApiKey && (
+          <p className="text-xs text-muted-foreground mt-1">Override stored in database.</p>
+        )}
+      </div>
       <div>
         <label className="text-sm font-medium">Min Severity for Exploit Generation</label>
         <Select className="mt-1 w-full" value={form.exploitMinSeverity} onChange={(e) => setForm((f) => ({ ...f, exploitMinSeverity: e.target.value }))}>
@@ -186,7 +247,7 @@ function ScannerTab() {
 
 function NotificationsTab() {
   const qc = useQueryClient();
-  const { data: config } = useQuery({ queryKey: ['worker-config'], queryFn: () => api.getWorkerConfig() as Promise<WorkerConfig> });
+  const { data: config } = useQuery({ queryKey: ['worker-config'], queryFn: () => api.getWorkerConfig() as Promise<WorkerConfigView> });
   const [form, setForm] = useState({ notifyWebhookUrl: '', notifyOnCritical: true, notifyOnScanComplete: false });
 
   useEffect(() => {

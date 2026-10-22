@@ -30,14 +30,41 @@ const schema = z.object({
   // Model passed to @cursor/sdk Agent.create(); use "composer-latest" or a specific model ID.
   CURSOR_AGENT_MODEL: z.string().default('claude-sonnet-4-5'),
   CURSOR_API_KEY: z.string().optional(),
+  // cursor = @cursor/sdk. claude = @anthropic-ai/claude-agent-sdk (optional proxy via ANTHROPIC_*).
+  AGENT_RUNNER: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : typeof v === 'string' ? v.trim().toLowerCase() : v),
+    z.enum(['cursor', 'claude']).default('cursor'),
+  ),
+  // Model id for the Claude runner. OpenAI-compatible proxies expect ids like openai/glm-5.2.
+  CLAUDE_AGENT_MODEL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().default('openai/glm-5.2'),
+  ),
+  // Optional. When empty, the Claude runner does not set ANTHROPIC_BASE_URL.
+  ANTHROPIC_BASE_URL: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  // Optional. When empty, the Claude runner does not set ANTHROPIC_API_KEY.
+  ANTHROPIC_API_KEY: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
   // Set to "true" to log the full prompt and result text from @cursor/sdk calls
   DEBUG_CURSOR: z.string().transform((v) => v === 'true').default('false'),
   /**
-   * CVE hunt backend:
+   * Default CVE hunt backend when a job does not set cveSkill:
    * - ai-finder — Cursor cve-ai-finder skill only (no Semgrep)
    * - semgrep-pattern-hunter — Semgrep candidate gate + cve-pattern-hunter verification
+   * - cve-variant-hunter — incomplete-fix / patch-bypass / variant analysis
+   * - sbom-vuln-mapper — reachable dependency CVEs
    */
-  CVE_SCAN_MODE: z.enum(['ai-finder', 'semgrep-pattern-hunter']).default('ai-finder'),
+  CVE_SCAN_MODE: z.enum([
+    'ai-finder',
+    'semgrep-pattern-hunter',
+    'cve-variant-hunter',
+    'sbom-vuln-mapper',
+  ]).default('ai-finder'),
   // semgrep-pattern-hunter mode only (requires `semgrep` on PATH).
   // No Semgrep matches → cve-pattern-hunter (cursor scan) is skipped entirely.
   CVE_SEMGREP_ENABLED: z.string().transform((v) => v !== 'false').default('true'),
@@ -112,7 +139,11 @@ if (process.env.DEBUG_CONFIG_PATHS !== 'false') {
     `[config]   REPORTS_DIR    = ${config.REPORTS_DIR}\n` +
     `[config]   LOGS_DIR       = ${config.LOGS_DIR}\n` +
     `[config]   SKILLS_DIR     = ${config.SKILLS_DIR}\n` +
-    `[config]   CVE_SCAN_MODE  = ${config.CVE_SCAN_MODE}\n`,
+    `[config]   CVE_SCAN_MODE  = ${config.CVE_SCAN_MODE}\n` +
+    `[config]   AGENT_RUNNER   = ${config.AGENT_RUNNER}\n` +
+    `[config]   CLAUDE_AGENT_MODEL = ${config.CLAUDE_AGENT_MODEL}\n` +
+    `[config]   ANTHROPIC_BASE_URL = ${config.ANTHROPIC_BASE_URL ?? '(not set)'}\n` +
+    `[config]   ANTHROPIC_API_KEY  = ${config.ANTHROPIC_API_KEY ? 'set' : '(not set)'}\n`,
   );
 }
 

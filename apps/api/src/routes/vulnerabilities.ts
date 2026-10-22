@@ -11,7 +11,7 @@ import {
 } from '../services/artifacts.js';
 import { listFindingArtifactFiles } from '../lib/artifact-files.js';
 import { getNextUnexploitedFinding, setFindingExploitable } from '../services/findings.js';
-import type { PackageType } from '@secscan/shared';
+import { FINDING_ORIGINS, type PackageType } from '@secscan/shared';
 
 const artifactUpload = multer({
   storage: multer.memoryStorage(),
@@ -44,6 +44,7 @@ const vulnQuerySchema = z.object({
   sortDir:        z.enum(['asc', 'desc']).default('desc'),
   /** GitHub PVR filter: enabled | disabled | unknown */
   pvr:            z.enum(['enabled', 'disabled', 'unknown']).optional(),
+  findingOrigin:  z.enum(FINDING_ORIGINS).optional(),
 });
 
 function repoGhFields(repo: {
@@ -103,6 +104,9 @@ router.get('/', async (req, res) => {
       where.scanJob = { repo: repoClauses[0] };
     } else if (repoClauses.length > 1) {
       where.scanJob = { repo: { AND: repoClauses } };
+    }
+    if (q.findingOrigin) {
+      where.metadataJson = { path: ['finding_origin'], equals: q.findingOrigin };
     }
 
     const repoSelect = {
@@ -181,6 +185,7 @@ const droppedQuerySchema = z.object({
   cwe:        z.string().optional(),
   vulnType:   z.string().optional(),
   repoUrl:    z.string().optional(),
+  findingOrigin: z.enum(FINDING_ORIGINS).optional(),
 });
 
 type VulnWithRepo = Awaited<ReturnType<typeof prisma.vulnerability.findMany<{
@@ -249,6 +254,9 @@ router.get('/dropped', async (req, res) => {
     if (q.vulnType)   where.vulnType = { contains: q.vulnType, mode: 'insensitive' };
     if (q.repoUrl) {
       where.scanJob = { repo: { url: { contains: q.repoUrl, mode: 'insensitive' } } };
+    }
+    if (q.findingOrigin) {
+      where.metadataJson = { path: ['finding_origin'], equals: q.findingOrigin };
     }
 
     const [vulns, total] = await Promise.all([
@@ -491,15 +499,21 @@ router.patch('/:id/promote', async (req, res) => {
 
 router.post('/:id/generate-exploit', async (req, res) => {
   try {
+    const body = z.object({ force: z.boolean().default(false) }).parse(req.body ?? {});
     const vuln = await prisma.vulnerability.findUnique({
       where: { id: req.params.id },
       include: { scanJob: { include: { repo: true } } },
     });
     if (!vuln) return res.status(404).json({ error: 'Not found' });
 
-    // Block if already running or finished
-    if (vuln.exploitStatus !== null) {
-      return res.status(409).json({ error: `Exploit already ${vuln.exploitStatus} — delete it first to re-run` });
+    if (
+      vuln.exploitStatus !== null
+      && vuln.exploitStatus !== 'failed'
+      && !body.force
+    ) {
+      return res.status(409).json({
+        error: `Exploit already ${vuln.exploitStatus} — use force to re-queue`,
+      });
     }
 
     await prisma.vulnerability.update({

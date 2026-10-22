@@ -17,7 +17,18 @@ const SENSITIVE = [
   'DATABASE_URL',
   'GITHUB_TOKEN',
   'CURSOR_API_KEY',
+  'ANTHROPIC_API_KEY',
 ];
+
+/** Shown first on Settings → General so agent .env is easy to spot. */
+const ENV_DISPLAY_ORDER = [
+  'AGENT_RUNNER',
+  'CLAUDE_AGENT_MODEL',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_KEY',
+  'CURSOR_AGENT_MODEL',
+  'CURSOR_API_KEY',
+] as const;
 
 router.get('/mcp-config', (_req, res) => {
   res.json(buildMcpConfigPayload());
@@ -29,7 +40,15 @@ router.get('/env', (_req, res) => {
     if (v === undefined) continue;
     safe[k] = SENSITIVE.some((s) => k.includes(s)) ? MASKED : v;
   }
-  res.json(safe);
+  const ordered: Record<string, string> = {};
+  for (const key of ENV_DISPLAY_ORDER) {
+    if (safe[key] !== undefined) ordered[key] = safe[key]!;
+  }
+  const rest = Object.keys(safe)
+    .filter((k) => !(ENV_DISPLAY_ORDER as readonly string[]).includes(k))
+    .sort();
+  for (const k of rest) ordered[k] = safe[k]!;
+  res.json(ordered);
 });
 
 const clearTargetSchema = z.object({

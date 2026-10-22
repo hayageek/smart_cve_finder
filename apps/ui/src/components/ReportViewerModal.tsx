@@ -17,7 +17,6 @@ export function ReportViewerModal({ vulnId, open, onClose }: ReportViewerModalPr
       stacked
       resizable
       sizeStorageKey={REPORT_VIEWER_MODAL_SIZE_KEY}
-      defaultSize={{ width: 896, height: 720 }}
     >
       <div className="flex flex-col flex-1 min-h-0 gap-2">
         <iframe

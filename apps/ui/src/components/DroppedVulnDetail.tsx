@@ -5,6 +5,7 @@ import { Button } from './ui/Button.tsx';
 import { SeverityBadge, Badge } from './ui/Badge.tsx';
 import { RepoUrlLink } from './RepoUrlLink.tsx';
 import type { ApiVulnerability } from '@secscan/shared';
+import { FindingOriginBadge, FindingSkillSections } from './FindingSkillMeta.tsx';
 
 interface DroppedVulnDetailProps {
   vuln: ApiVulnerability;
@@ -54,6 +55,7 @@ export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading, on
             <SeverityBadge severity={vuln.severity} />
             <span className="font-mono text-xs text-muted-foreground">{vuln.cwe}</span>
             {vuln.vulnType && <Badge variant="outline">{vuln.vulnType}</Badge>}
+            <FindingOriginBadge metadataJson={vuln.metadataJson} />
             {vuln.cvssScore !== null && <Badge variant="outline">CVSS {vuln.cvssScore}</Badge>}
           </div>
           <Button size="sm" variant="outline" onClick={copyFindingId} title="Copy finding ID to clipboard">
@@ -127,6 +129,7 @@ export function DroppedVulnDetail({ vuln, onClose, onPromote, promoteLoading, on
             <p className="text-xs break-words">{vuln.message}</p>
           </div>
         )}
+        <FindingSkillSections metadataJson={vuln.metadataJson} />
         {meta.source_location && (
           <div>
             <p className="text-xs text-muted-foreground">Source → Sink</p>

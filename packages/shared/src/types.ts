@@ -5,6 +5,15 @@ export type PackageType = 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'gem';
 /** Which scan pipelines to run for a job. */
 export type ScanMode = 'both' | 'cve' | 'secrets';
 
+/** CVE hunt skill chosen for a job. Overrides the worker CVE_SCAN_MODE default. */
+export type CveHuntSkill = 'cve-ai-finder' | 'cve-variant-hunter' | 'sbom-vuln-mapper';
+
+export type FindingOrigin =
+  | 'cve-ai-finder'
+  | 'cve-pattern-hunter'
+  | 'cve-variant-hunter'
+  | 'sbom-vuln-mapper';
+
 /** Registry-backed package types (everything except git). */
 export type RegistryPackageType = Exclude<PackageType, 'git'>;
 
@@ -28,6 +37,14 @@ export interface ScanJobData {
   forceRescan?: boolean;
   /** Default: both — run CVE hunter and secret scan pipelines. */
   scanMode?: ScanMode;
+  /**
+   * CVE hunt skill for this job. Used when scanMode includes CVE.
+   * Omitted → worker CVE_SCAN_MODE (ai-finder or semgrep-pattern-hunter).
+   * Prefer cveSkills when more than one skill should run.
+   */
+  cveSkill?: CveHuntSkill;
+  /** Skills to run for this job. When set, each skill runs and findings keep their own finding_origin. */
+  cveSkills?: CveHuntSkill[];
 }
 
 export interface SourceAcquisitionInfo {
@@ -69,6 +86,10 @@ export interface VulnerabilityFinding {
       confidence_reasons: string[];
       sink_strength: number;
       instances: unknown[];
+      schema_version?: string;
+      finding_origin?: FindingOrigin | string;
+      variant?: VariantMetadata;
+      sbom?: SbomMetadata;
     };
   };
 }
@@ -97,6 +118,35 @@ export interface DroppedFinding {
   };
   drop_reason: string;
   drop_evidence: string;
+}
+
+/** cve-variant-hunter block on extra.metadata.variant */
+export interface VariantMetadata {
+  origin?: string;
+  related_cves?: string[];
+  fix_ref?: string;
+  original_location?: string;
+  bypass_rationale?: string;
+  variant_sweep_signature?: string;
+}
+
+/** sbom-vuln-mapper block on extra.metadata.sbom */
+export interface SbomMetadata {
+  package?: string;
+  version?: string;
+  ecosystem?: string;
+  upstream_cve?: string[];
+  osv_id?: string;
+  fixed_version?: string;
+  cvss_score?: number;
+  cvss_vector?: string;
+  vulnerable_symbol?: string;
+  dependency_kind?: string;
+  dependency_path?: string[];
+  introduced_by?: string;
+  reachable?: boolean;
+  reachability_evidence?: string;
+  remediation?: string;
 }
 
 // ── Secret scan output ───────────────────────────────────────────
@@ -261,6 +311,8 @@ export interface ApiScanJob {
   error: string | null;
   createdAt: string;
   scanMode: ScanMode;
+  /** CVE hunt skill recorded for this job, when the caller chose one. */
+  cveSkill: string | null;
   vulnCount: number;
   secretCount: number;
   exploitCount: number;
@@ -377,4 +429,21 @@ export interface WorkerConfig {
   notifyWebhookUrl: string | null;
   notifyOnCritical: boolean;
   notifyOnScanComplete: boolean;
+  /** cursor | claude. Null on older rows means the worker uses AGENT_RUNNER from the environment. */
+  agentRunner: 'cursor' | 'claude' | null;
+  /** Model id for the Claude runner (for example openai/glm-5.2). */
+  claudeAgentModel: string | null;
+  /** OpenAI-compatible proxy URL. Empty string means do not send ANTHROPIC_BASE_URL. */
+  anthropicBaseUrl: string | null;
+  /** Claude API key. Empty string means do not send ANTHROPIC_API_KEY. */
+  anthropicApiKey: string | null;
+}
+
+/** GET /api/workers/config — effective agent settings + env inheritance hints. */
+export interface WorkerConfigView extends WorkerConfig {
+  anthropicApiKeyConfigured?: boolean;
+  anthropicApiKeyFromEnv?: boolean;
+  claudeAgentModelFromEnv?: boolean;
+  agentRunnerFromEnv?: boolean;
+  anthropicBaseUrlFromEnv?: boolean;
 }

@@ -22,14 +22,57 @@ import {
   type SecretFinding,
   type Severity,
   type VulnerabilityFinding,
+  parseCveSkillList,
 } from '@secscan/shared';
 import { runSemgrepScan } from '@secscan/cve-semgrep';
 import { runSecretScanGate, redactSecret, type SecretCandidate } from '@secscan/secret-scan';
-import { runCursorSkill } from './cursor-runner.js';
-import type { RunSkillOptions } from './cursor-runner.js';
+import { runAgentSkill, type AgentSkillOptions } from './agent-runner.js';
 import type { CveScanMode } from './config.js';
 
 export type { CveScanMode };
+
+const CVE_SCAN_MODES = new Set<CveScanMode>([
+  'ai-finder',
+  'semgrep-pattern-hunter',
+  'cve-variant-hunter',
+  'sbom-vuln-mapper',
+]);
+
+/** Job skill overrides the worker CVE_SCAN_MODE default. */
+export function cveScanModeFromSkill(skill: string | undefined, fallback: CveScanMode): CveScanMode {
+  if (skill === 'cve-ai-finder') return 'ai-finder';
+  if (skill === 'cve-variant-hunter' || skill === 'sbom-vuln-mapper') return skill;
+  if (skill && CVE_SCAN_MODES.has(skill as CveScanMode)) return skill as CveScanMode;
+  return fallback;
+}
+
+/** One mode per selected skill. Empty selection uses the worker CVE_SCAN_MODE default. */
+export function cveScanModesForJob(
+  skills: string | readonly string[] | null | undefined,
+  fallback: CveScanMode,
+): CveScanMode[] {
+  const list = parseCveSkillList(skills);
+  if (list.length === 0) return [cveScanModeFromSkill(undefined, fallback)];
+  return list.map((skill) => cveScanModeFromSkill(skill, fallback));
+}
+
+export function findingOriginForScanMode(mode: CveScanMode): string {
+  switch (mode) {
+    case 'semgrep-pattern-hunter': return 'cve-pattern-hunter';
+    case 'cve-variant-hunter': return 'cve-variant-hunter';
+    case 'sbom-vuln-mapper': return 'sbom-vuln-mapper';
+    default: return 'cve-ai-finder';
+  }
+}
+
+export function primarySkillForScanMode(mode: CveScanMode): string {
+  switch (mode) {
+    case 'semgrep-pattern-hunter': return 'cve-pattern-hunter';
+    case 'cve-variant-hunter': return 'cve-variant-hunter';
+    case 'sbom-vuln-mapper': return 'sbom-vuln-mapper';
+    default: return 'cve-ai-finder';
+  }
+}
 
 export type { VulnerabilityFinding, DroppedFinding, SecretFinding, DroppedSecretFinding };
 
@@ -428,6 +471,56 @@ export interface AcquireOptions {
   version?: string;
   destDir: string;
   gitDepth?: number;
+  /**
+   * Clone without --depth. Registry packages clone the upstream forge repo
+   * when one is known (cve-variant-hunter needs fix commits).
+   */
+  fullGitHistory?: boolean;
+}
+
+function isCloneableGitUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    const known =
+      host === 'github.com' || host.endsWith('.github.com')
+      || host === 'gitlab.com' || host.endsWith('.gitlab.com')
+      || host === 'bitbucket.org';
+    const parts = u.pathname.split('/').filter(Boolean);
+    return known && parts.length >= 2;
+  } catch {
+    return false;
+  }
+}
+
+async function cloneGitRepo(
+  target: string,
+  destDir: string,
+  gitDepth: number,
+  log: PipelineLogger,
+): Promise<void> {
+  log.info(gitDepth > 0 ? `Cloning ${target} (depth ${gitDepth})` : `Cloning ${target} (full history)`);
+  await prepareDestDir(destDir, log);
+  if (gitDepth > 0) {
+    await simpleGit().clone(target, destDir, { '--depth': String(gitDepth) });
+  } else {
+    await simpleGit().clone(target, destDir);
+  }
+}
+
+async function checkoutPackageVersion(destDir: string, version: string, log: PipelineLogger): Promise<void> {
+  const git = simpleGit(destDir);
+  for (const tag of [version, `v${version.replace(/^v/, '')}`]) {
+    try {
+      await git.checkout(tag);
+      log.info(`Checked out ${tag}`);
+      return;
+    } catch {
+      // try the next ref
+    }
+  }
+  log.warn(`No git tag for ${version}; scanning the default branch with full history`);
 }
 
 export interface AcquireResult {
@@ -451,22 +544,31 @@ export async function acquireSource(
   opts: AcquireOptions,
   log: PipelineLogger = noopLogger,
 ): Promise<AcquireResult> {
-  const { packageType, target, version, destDir, gitDepth = 1 } = opts;
+  const { packageType, target, version, destDir, gitDepth = 1, fullGitHistory = false } = opts;
+  const depth = fullGitHistory ? 0 : gitDepth;
 
   if (packageType !== 'git') {
     log.info(`Resolving ${packageType} package: ${target}${version ? `@${version}` : ''}`);
     const meta = await resolveRegistryPackage(packageType, target, version);
     log.info(`Resolved ${target}@${meta.resolvedVersion} — ${meta.tarballUrl}`);
     if (meta.repoUrl) log.info(`Repository: ${meta.repoUrl}`);
+    if (fullGitHistory && meta.repoUrl && isCloneableGitUrl(meta.repoUrl)) {
+      try {
+        await cloneGitRepo(meta.repoUrl, destDir, 0, log);
+        await checkoutPackageVersion(destDir, meta.resolvedVersion, log);
+        log.info('Upstream clone successful');
+        return { resolvedVersion: meta.resolvedVersion, repoUrl: meta.repoUrl, tarballUrl: meta.tarballUrl };
+      } catch (err) {
+        log.warn(`Full git clone failed (${err}); falling back to the registry archive`);
+      }
+    }
     await downloadAndExtract(meta.tarballUrl, destDir, log, meta.archiveFormat);
     return { resolvedVersion: meta.resolvedVersion, repoUrl: meta.repoUrl, tarballUrl: meta.tarballUrl };
   }
 
   // git — destination must be empty (clone fails otherwise)
-  log.info(`Cloning ${target}`);
-  await prepareDestDir(destDir, log);
   try {
-    await simpleGit().clone(target, destDir, { '--depth': String(gitDepth) });
+    await cloneGitRepo(target, destDir, depth, log);
     log.info('Clone successful');
     return { isPrivate: false };
   } catch (cloneErr: unknown) {
@@ -497,11 +599,28 @@ export interface InjectSkillsOptions {
   tmpDir: string;
   /** Which CVE skill bundle to inject (default: ai-finder). */
   cveScanMode?: CveScanMode;
+  /** When set, inject the union of skills for every selected mode. */
+  cveScanModes?: CveScanMode[];
+  /** When set, inject only these skill directory names (skips CVE mode resolution). */
+  skillNames?: string[];
 }
 
 function skillsForCveMode(mode: CveScanMode): string[] {
-  const cveSkill = mode === 'semgrep-pattern-hunter' ? 'cve-pattern-hunter' : 'cve-ai-finder';
-  return [cveSkill, 'exploit-generator', 'secret-finding-triage'];
+  const companions = ['exploit-generator', 'secret-finding-triage'];
+  const primary = primarySkillForScanMode(mode);
+  // Variant and SBOM skills read cve-ai-finder language prompts.
+  if (mode === 'cve-variant-hunter' || mode === 'sbom-vuln-mapper') {
+    return [primary, 'cve-ai-finder', ...companions];
+  }
+  return [primary, ...companions];
+}
+
+function skillsForCveModes(modes: CveScanMode[]): string[] {
+  const names = new Set<string>();
+  for (const mode of modes) {
+    for (const skill of skillsForCveMode(mode)) names.add(skill);
+  }
+  return [...names];
 }
 
 /**
@@ -513,12 +632,24 @@ export async function injectSkills(
   log: PipelineLogger = noopLogger,
 ): Promise<void> {
   const { workspacePath, skillsDir, skillsRepoUrl, tmpDir } = opts;
-  const cveScanMode = opts.cveScanMode ?? 'ai-finder';
+  const cveScanModes = opts.cveScanModes?.length
+    ? opts.cveScanModes
+    : [opts.cveScanMode ?? 'ai-finder'];
   const skillsDest = path.join(workspacePath, '.cursor', 'skills');
   await mkdir(skillsDest, { recursive: true });
 
-  const skills = skillsForCveMode(cveScanMode);
-  log.info(`CVE scan mode: ${cveScanMode} (injecting: ${skills.join(', ')})`);
+  const placeSkill = async (src: string, name: string) => {
+    await cp(src, path.join(skillsDest, name), { recursive: true });
+  };
+
+  const skills = opts.skillNames?.length
+    ? [...opts.skillNames]
+    : skillsForCveModes(cveScanModes);
+  log.info(
+    opts.skillNames?.length
+      ? `Injecting skills: ${skills.join(', ')}`
+      : `CVE scan mode: ${cveScanModes.join(', ')} (injecting: ${skills.join(', ')})`,
+  );
 
   const missingSkills: string[] = [];
 
@@ -527,7 +658,7 @@ export async function injectSkills(
     for (const skill of skills) {
       const src = path.join(skillsDir, skill);
       if (existsSync(src)) {
-        await cp(src, path.join(skillsDest, skill), { recursive: true });
+        await placeSkill(src, skill);
         log.info(`Copied skill: ${skill}`);
       } else {
         log.warn(`Skill not found in SKILLS_DIR: ${skill}`);
@@ -542,7 +673,7 @@ export async function injectSkills(
       for (const skill of skills) {
         const src = path.join(skillsTmp, skill);
         if (existsSync(src)) {
-          await cp(src, path.join(skillsDest, skill), { recursive: true });
+          await placeSkill(src, skill);
           log.info(`Injected skill: ${skill}`);
         } else {
           log.warn(`Skill not found in cloned repo: ${skill}`);
@@ -556,11 +687,12 @@ export async function injectSkills(
     }
   }
 
-  const cveSkill = skills[0];
-  if (missingSkills.includes(cveSkill)) {
+  const required = [...new Set(cveScanModes.map(primarySkillForScanMode))];
+  const missingRequired = required.filter((skill) => missingSkills.includes(skill));
+  if (missingRequired.length > 0) {
     throw new Error(
-      `Required CVE skill "${cveSkill}" missing from SKILLS_DIR (${skillsDir}). ` +
-      `Mount ./skills with ${cveSkill}/ or set CVE_SCAN_MODE=semgrep-pattern-hunter if using the remote skills repo.`,
+      `Required CVE skill(s) missing from SKILLS_DIR (${skillsDir}): ${missingRequired.join(', ')}. ` +
+      `Mount ./skills with those directories.`,
     );
   }
   if (missingSkills.length > 0) {
@@ -688,12 +820,87 @@ const EXPLOIT_ARTIFACT_FILENAME_KEYS: Record<string, keyof ExploitArtifactPaths>
 
 const REQUIRED_EXPLOIT_ARTIFACTS = ['report.md', 'result.txt'] as const;
 
+const EXPLOIT_ARTIFACT_BASENAMES = new Set<string>(Object.keys(EXPLOIT_ARTIFACT_FILENAME_KEYS));
+
+function isExploitArtifactBasename(name: string): boolean {
+  return EXPLOIT_ARTIFACT_BASENAMES.has(name);
+}
+
+/** True when `reportDir` is the acquired source tree (agent mistakenly used repo root as report_dir). */
+function reportDirIsWorkspaceTree(reportDir: string, workspaceRoot?: string): boolean {
+  if (!workspaceRoot) return false;
+  const reportAbs = path.resolve(reportDir);
+  const workspaceAbs = path.resolve(workspaceRoot);
+  if (reportAbs === workspaceAbs) return true;
+  const rel = path.relative(workspaceAbs, reportAbs);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 /**
  * Parse the `<<<EXPLOIT_RESULT_JSON>>>` block from exploit-generator output.
  * Returns null if the block is absent or malformed.
  */
+function looksLikeExploitResultJson(value: unknown): value is ExploitResultJson {
+  if (!value || typeof value !== 'object') return false;
+  const result = (value as ExploitResultJson).result;
+  return typeof result === 'string' && result.startsWith('EXPLOIT_');
+}
+
+/** Parse JSON from markdown fences when marker blocks are missing. */
+function parseExploitResultFromFences(text: string): ExploitResultJson | null {
+  const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRe.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1]!.trim()) as unknown;
+      if (looksLikeExploitResultJson(parsed)) return parsed;
+    } catch {
+      /* try next fence */
+    }
+  }
+  return null;
+}
+
+/** Bracket-balanced scan for an object containing `"result": "EXPLOIT_…"`. */
+function parseExploitResultFromEmbeddedObject(text: string): ExploitResultJson | null {
+  const needle = /"result"\s*:\s*"EXPLOIT_/g;
+  let match: RegExpExecArray | null;
+  while ((match = needle.exec(text)) !== null) {
+    let start = match.index;
+    while (start > 0 && text[start] !== '{') start--;
+    if (text[start] !== '{') continue;
+
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          const slice = text.slice(start, i + 1);
+          try {
+            const parsed = JSON.parse(slice) as unknown;
+            if (looksLikeExploitResultJson(parsed)) return parsed;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse the `<<<EXPLOIT_RESULT_JSON>>>` block from exploit-generator output.
+ * Falls back to fenced JSON and embedded objects (see reference-output-schema.md).
+ */
 export function parseExploitResult(text: string): ExploitResultJson | null {
-  return extractJsonBlock<ExploitResultJson>(text, 'EXPLOIT_RESULT_JSON');
+  const fromMarkers = extractJsonBlock<ExploitResultJson>(text, 'EXPLOIT_RESULT_JSON');
+  if (fromMarkers && looksLikeExploitResultJson(fromMarkers)) return fromMarkers;
+
+  return parseExploitResultFromFences(text)
+    ?? parseExploitResultFromEmbeddedObject(text);
 }
 
 /**
@@ -704,6 +911,7 @@ export async function collectExploitArtifacts(
   result: ExploitResultJson,
   destDir: string,
   log: PipelineLogger = noopLogger,
+  options?: { workspaceRoot?: string },
 ): Promise<ExploitArtifactPaths> {
   const paths: ExploitArtifactPaths = {
     report: null, result: null, error: null, payload: null, exploit: null, runScript: null, dockerRunScript: null,
@@ -726,11 +934,21 @@ export async function collectExploitArtifacts(
     return paths;
   }
 
+  if (reportDirIsWorkspaceTree(reportDir, options?.workspaceRoot)) {
+    log.warn(
+      `report_dir is inside the source workspace (${reportDir}) — only known PoC filenames will be copied`,
+    );
+  }
+
   await mkdir(destDir, { recursive: true });
 
   const entries = await readdir(reportDir, { withFileTypes: true });
   for (const ent of entries) {
     if (!ent.isFile()) continue;
+    if (!isExploitArtifactBasename(ent.name)) {
+      log.warn(`Skipping non-artifact file in report_dir: ${ent.name}`);
+      continue;
+    }
 
     const src = path.join(reportDir, ent.name);
     const dest = path.join(destDir, ent.name);
@@ -790,6 +1008,7 @@ export async function collectArtifactsFromWorkspace(
     }
     for (const ent of entries) {
       if (!ent.isFile() || copied.has(ent.name)) continue;
+      if (!isExploitArtifactBasename(ent.name)) continue;
 
       const src = path.join(dir, ent.name);
       const dest = path.join(destDir, ent.name);
@@ -813,7 +1032,28 @@ export const EMPTY_CVE_SCAN_OUTPUT =
   '<<<CVE_HUNTER_FINDINGS_JSON>>>\n[]\n<<<END_CVE_HUNTER_FINDINGS_JSON>>>\n' +
   '<<<CVE_HUNTER_DROPS_JSON>>>\n[]\n<<<END_CVE_HUNTER_DROPS_JSON>>>';
 
-export interface CveScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
+type AgentRunFields = Pick<
+  AgentSkillOptions,
+  'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk' | 'runner' | 'anthropicBaseUrl' | 'anthropicApiKey'
+>;
+
+function skillFields(opts: AgentRunFields, log: PipelineLogger): AgentRunFields & {
+  onDebug: (msg: string) => void;
+} {
+  return {
+    cwd: opts.cwd,
+    model: opts.model,
+    apiKey: opts.apiKey,
+    debug: opts.debug,
+    onChunk: opts.onChunk,
+    runner: opts.runner,
+    anthropicBaseUrl: opts.anthropicBaseUrl,
+    anthropicApiKey: opts.anthropicApiKey,
+    onDebug: (msg) => log.info(`[agent] ${msg}`),
+  };
+}
+
+export interface CveScanOptions extends AgentRunFields {
   /** CVE hunt backend (default: ai-finder). */
   scanMode?: CveScanMode;
   /** semgrep-pattern-hunter mode: run Semgrep before the agent (default: true). */
@@ -836,16 +1076,11 @@ async function runAiFinderCveScan(
 ): Promise<CveScanResult> {
   log.info(`CVE scan (ai-finder): workspace ${opts.cwd}`);
 
-  const result = await runCursorSkill({
+  const result = await runAgentSkill({
     skillPath:
       `Follow the "cve-ai-finder" skill instructions to perform an end-to-end source-to-sink security scan.\n` +
       `Workspace: ${opts.cwd}`,
-    cwd: opts.cwd,
-    model: opts.model,
-    apiKey: opts.apiKey,
-    debug: opts.debug,
-    onChunk: opts.onChunk,
-    onDebug: (msg) => log.info(`[cursor] ${msg}`),
+    ...skillFields(opts, log),
   });
 
   const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
@@ -896,18 +1131,13 @@ async function runSemgrepPatternHunterCveScan(
     2,
   );
 
-  const result = await runCursorSkill({
+  const result = await runAgentSkill({
     skillPath:
       `Follow the "cve-pattern-hunter" skill instructions to verify the Semgrep candidate vulnerabilities below and prune false positives.\n` +
       `Workspace: ${opts.cwd}\n` +
       `Semgrep candidate list:`,
     promptSuffix: candidateJson,
-    cwd: opts.cwd,
-    model: opts.model,
-    apiKey: opts.apiKey,
-    debug: opts.debug,
-    onChunk: opts.onChunk,
-    onDebug: (msg) => log.info(`[cursor] ${msg}`),
+    ...skillFields(opts, log),
   });
 
   const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
@@ -918,11 +1148,57 @@ async function runSemgrepPatternHunterCveScan(
   return { findings, drops, rawOutput: result.text };
 }
 
+async function runVariantHunterCveScan(
+  opts: CveScanOptions,
+  log: PipelineLogger,
+): Promise<CveScanResult> {
+  log.info(`CVE scan (cve-variant-hunter): workspace ${opts.cwd}`);
+
+  const result = await runAgentSkill({
+    skillPath:
+      `Follow the "cve-variant-hunter" skill instructions to review known CVEs in this repository for incomplete fixes, patch bypasses, and unpatched variants.\n` +
+      `Workspace: ${opts.cwd}\n` +
+      `Git history is available. Use the skill script scripts/fetch_advisories.py for advisory intel.\n` +
+      `Emit the shared findings JSON with extra.metadata.finding_origin "cve-variant-hunter" and extra.metadata.variant on every emitted finding.`,
+    ...skillFields(opts, log),
+  });
+
+  const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
+  const rawDrops = extractJsonBlock<Record<string, unknown>[]>(result.text, 'CVE_HUNTER_DROPS_JSON') ?? [];
+  const drops = rawDrops.map(normalizeDroppedFinding);
+  log.info(`CVE scan (cve-variant-hunter) complete: ${findings.length} findings, ${drops.length} drops`);
+  return { findings, drops, rawOutput: result.text };
+}
+
+async function runSbomVulnMapperCveScan(
+  opts: CveScanOptions,
+  log: PipelineLogger,
+): Promise<CveScanResult> {
+  log.info(`CVE scan (sbom-vuln-mapper): workspace ${opts.cwd}`);
+
+  const result = await runAgentSkill({
+    skillPath:
+      `Follow the "sbom-vuln-mapper" skill instructions to map reachable dependency CVEs to first-party call sites.\n` +
+      `Workspace: ${opts.cwd}\n` +
+      `Enumerate with osv-scanner. Fallbacks already on PATH: npm audit, pip-audit, cargo audit, govulncheck. Do not read lockfiles.\n` +
+      `Emit the shared findings JSON with extra.metadata.finding_origin "sbom-vuln-mapper" and extra.metadata.sbom on every emitted finding.`,
+    ...skillFields(opts, log),
+  });
+
+  const findings = extractJsonBlock<VulnerabilityFinding[]>(result.text, 'CVE_HUNTER_FINDINGS_JSON') ?? [];
+  const rawDrops = extractJsonBlock<Record<string, unknown>[]>(result.text, 'CVE_HUNTER_DROPS_JSON') ?? [];
+  const drops = rawDrops.map(normalizeDroppedFinding);
+  log.info(`CVE scan (sbom-vuln-mapper) complete: ${findings.length} findings, ${drops.length} drops`);
+  return { findings, drops, rawOutput: result.text };
+}
+
 /**
  * Run a CVE hunt against a workspace and return parsed findings.
  *
  * Mode `ai-finder` (default): Cursor cve-ai-finder skill — no Semgrep.
  * Mode `semgrep-pattern-hunter`: Semgrep enumerates sinks, then cve-pattern-hunter verifies.
+ * Mode `cve-variant-hunter`: incomplete fixes, patch bypasses, and variants of known CVEs.
+ * Mode `sbom-vuln-mapper`: reachable Critical/High CVEs in dependencies.
  *
  * Used by both the BullMQ scanWorker and the CLI's `scan` command.
  */
@@ -931,9 +1207,9 @@ export async function runCveScan(
   log: PipelineLogger = noopLogger,
 ): Promise<CveScanResult> {
   const mode = opts.scanMode ?? 'ai-finder';
-  if (mode === 'semgrep-pattern-hunter') {
-    return runSemgrepPatternHunterCveScan(opts, log);
-  }
+  if (mode === 'semgrep-pattern-hunter') return runSemgrepPatternHunterCveScan(opts, log);
+  if (mode === 'cve-variant-hunter') return runVariantHunterCveScan(opts, log);
+  if (mode === 'sbom-vuln-mapper') return runSbomVulnMapperCveScan(opts, log);
   return runAiFinderCveScan(opts, log);
 }
 
@@ -943,7 +1219,7 @@ export const EMPTY_SECRET_SCAN_OUTPUT =
   '<<<SECRET_FINDINGS_JSON>>>\n[]\n<<<END_SECRET_FINDINGS_JSON>>>\n' +
   '<<<SECRET_DROPS_JSON>>>\n[]\n<<<END_SECRET_DROPS_JSON>>>';
 
-export interface SecretScanOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface SecretScanOptions extends AgentRunFields {
   gitleaksBin?: string;
   trufflehogBin?: string;
   /** Scan filesystem only (no git history). Default true for registry packages. */
@@ -1165,15 +1441,10 @@ export async function runSecretScan(
       `[secret-finding-triage] skill input (${triagePayload.length} chars, ${forTriage.length} candidate(s)):\n${triagePayload}`,
     );
 
-    const result = await runCursorSkill({
+    const result = await runAgentSkill({
       skillPath: skillInstruction,
       promptSuffix: triagePayload,
-      cwd:       opts.cwd,
-      model:     opts.model,
-      apiKey:    opts.apiKey,
-      debug:     opts.debug,
-      onChunk:   opts.onChunk,
-      onDebug: (msg) => log.info(`[secret-finding-triage] ${msg}`),
+      ...skillFields(opts, log),
     });
 
     rawOutput = result.text;
@@ -1199,11 +1470,13 @@ export async function runSecretScan(
 
 // ── runExploitGen ─────────────────────────────────────────────────
 
-export interface ExploitGenOptions extends Pick<RunSkillOptions, 'cwd' | 'model' | 'apiKey' | 'debug' | 'onChunk'> {
+export interface ExploitGenOptions extends AgentRunFields {
   /** JSON string describing the vulnerability (passed as prompt suffix). */
   vulnJson: string;
   /** Directory where artifact files (report.md, result.txt, error.txt) are copied. */
   destDir: string;
+  /** Vulnerability / finding id (PoC dir naming + EXPLOIT_RESULT_JSON). */
+  findingId?: string;
 }
 
 export interface ExploitGenResult {
@@ -1217,38 +1490,59 @@ export interface ExploitGenResult {
  * and collect artifact files into `destDir`.
  * Used by both the BullMQ exploitWorker and the CLI's `scan`/`exploit` commands.
  */
+const EXPLOIT_JSON_FOOTER = (findingId: string) =>
+  `\n\nMandatory: after the PoC workflow completes, emit exactly one block:\n` +
+  `<<<EXPLOIT_RESULT_JSON>>>\n` +
+  `{ "finding_id": "${findingId}", "result": "EXPLOIT_SUCCESS|EXPLOIT_FAILED|...", "attempts": <1-6>, "report_dir": "<POC_DIR>" }\n` +
+  `<<<END_EXPLOIT_RESULT_JSON>>>\n` +
+  `Use finding_id verbatim. Include report_dir pointing at the directory that contains report.md and result.txt.`;
+
 export async function runExploitGen(
   opts: ExploitGenOptions,
   log: PipelineLogger = noopLogger,
 ): Promise<ExploitGenResult> {
-  const skillPath =
-    `Follow the "exploit-generator" skill instructions to generate an exploit for the vulnerability below.\n` +
-    `Workspace: ${opts.cwd}\n` +
+  const findingId = opts.findingId ?? (() => {
+    try {
+      const v = JSON.parse(opts.vulnJson) as { finding_id?: string; id?: string };
+      return v.finding_id ?? v.id;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  let skillPath =
+    `Follow the "exploit-generator" skill in .cursor/skills/exploit-generator (read SKILL.md and reference-output-schema.md).\n` +
+    `Workspace (SOURCE_DIR): ${opts.cwd}\n` +
     `Vulnerability details:`;
 
-  const result = await runCursorSkill({
+  if (findingId) {
+    skillPath += EXPLOIT_JSON_FOOTER(findingId);
+  }
+
+  const result = await runAgentSkill({
     skillPath,
     promptSuffix: opts.vulnJson,
-    cwd:          opts.cwd,
-    model:        opts.model,
-    apiKey:       opts.apiKey,
-    debug:        opts.debug,
-    onChunk:      opts.onChunk,
-    onDebug: (msg) => log.info(`[cursor] ${msg}`),
+    ...skillFields(opts, log),
   });
 
   const exploitResult = parseExploitResult(result.text);
   if (!exploitResult) {
     log.warn('<<<EXPLOIT_RESULT_JSON>>> block not found in exploit-generator output');
+    await mkdir(opts.destDir, { recursive: true });
+    const debugPath = path.join(opts.destDir, 'agent-output.txt');
+    await writeFile(debugPath, result.text, 'utf-8').catch(() => {});
+    log.warn(`Saved raw agent text for debugging: ${debugPath} (${result.text.length} chars)`);
   } else {
     log.info(`Exploit result: ${exploitResult.result} (${exploitResult.attempts ?? '?'} attempts)`);
   }
 
-  const artifacts = exploitResult
-    ? await collectExploitArtifacts(exploitResult, opts.destDir, log)
-    : {
-        report: null, result: null, error: null, payload: null, exploit: null, runScript: null, dockerRunScript: null,
-      };
+  let artifacts: ExploitArtifactPaths = {
+    report: null, result: null, error: null, payload: null, exploit: null, runScript: null, dockerRunScript: null,
+  };
+  if (exploitResult) {
+    await prepareDestDir(opts.destDir, log);
+    artifacts = await collectExploitArtifacts(exploitResult, opts.destDir, log, { workspaceRoot: opts.cwd });
+  }
 
   return { exploitResult, artifacts, rawOutput: result.text };
 }

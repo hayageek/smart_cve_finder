@@ -1,4 +1,4 @@
-import type { PackageType, ScanMode } from '@secscan/shared';
+import type { CveHuntSkill, PackageType, ScanMode } from '@secscan/shared';
 import { prisma } from '../db/client.js';
 import {
   enqueueScanJob,
@@ -6,6 +6,7 @@ import {
   isRepoInScanPipeline,
 } from '../lib/scan-queue.js';
 import {
+  cveSkillJobFields,
   entryToCreateData,
   entryToScanJobPayload,
   type ParsedEntry,
@@ -48,6 +49,7 @@ function formatScanJob(job: {
   status: string;
   stage: string | null;
   scanMode?: string;
+  cveSkill?: string | null;
   bullJobId: string | null;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -64,6 +66,7 @@ function formatScanJob(job: {
     status: job.status,
     stage: job.stage,
     scanMode: (job.scanMode ?? 'both') as ScanMode,
+    cveSkill: job.cveSkill ?? null,
     bullJobId: job.bullJobId,
     startedAt: job.startedAt?.toISOString() ?? null,
     finishedAt: job.finishedAt?.toISOString() ?? null,
@@ -93,6 +96,7 @@ async function queueExistingRepo(
   },
   force: boolean,
   scanMode: ScanMode = 'both',
+  cveSkills?: CveHuntSkill[],
 ): Promise<EnqueueScanItemResult> {
   if (isRepoActivelyScanning(repo.status)) {
     return {
@@ -149,7 +153,10 @@ async function queueExistingRepo(
     );
   }
 
-  const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending', scanMode } });
+  const skill = cveSkillJobFields(cveSkills);
+  const scanJob = await prisma.scanJob.create({
+    data: { repoId: repo.id, status: 'pending', scanMode, cveSkill: skill.stored },
+  });
   const result = await enqueueScanJob(repo.id, {
     repoUrl: repo.url,
     packageType: (repo.packageType as PackageType) ?? 'git',
@@ -157,6 +164,7 @@ async function queueExistingRepo(
     packageVersion: repo.packageVersion ?? undefined,
     scanJobId: scanJob.id,
     scanMode,
+    ...skill.payload,
     ...(force ? { forceRescan: true } : {}),
   });
 
@@ -191,10 +199,17 @@ async function queueExistingRepo(
   };
 }
 
-async function queueNewEntry(entry: ParsedEntry, scanMode: ScanMode = 'both'): Promise<EnqueueScanItemResult> {
+async function queueNewEntry(
+  entry: ParsedEntry,
+  scanMode: ScanMode = 'both',
+  cveSkills?: CveHuntSkill[],
+): Promise<EnqueueScanItemResult> {
   const repo = await prisma.repo.create({ data: entryToCreateData(entry) });
-  const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending', scanMode } });
-  const result = await enqueueScanJob(repo.id, entryToScanJobPayload(entry, scanJob.id, scanMode));
+  const skill = cveSkillJobFields(cveSkills);
+  const scanJob = await prisma.scanJob.create({
+    data: { repoId: repo.id, status: 'pending', scanMode, cveSkill: skill.stored },
+  });
+  const result = await enqueueScanJob(repo.id, entryToScanJobPayload(entry, scanJob.id, scanMode, cveSkills));
 
   if (!result.queued) {
     await prisma.scanJob.delete({ where: { id: scanJob.id } }).catch(() => undefined);
@@ -227,10 +242,11 @@ async function queueNewEntry(entry: ParsedEntry, scanMode: ScanMode = 'both'): P
 
 export async function enqueueScans(
   targets: ScanTargetInput[],
-  options: { force?: boolean; scanMode?: ScanMode } = {},
+  options: { force?: boolean; scanMode?: ScanMode; cveSkills?: CveHuntSkill[] } = {},
 ): Promise<EnqueueScanResult> {
   const force = options.force ?? false;
   const scanMode = options.scanMode ?? 'both';
+  const cveSkills = scanMode === 'secrets' ? undefined : options.cveSkills;
   const results: EnqueueScanItemResult[] = [];
   const seen = new Set<string>();
 
@@ -273,9 +289,9 @@ export async function enqueueScans(
     });
 
     if (existing) {
-      results.push(await queueExistingRepo(existing, force, scanMode));
+      results.push(await queueExistingRepo(existing, force, scanMode, cveSkills));
     } else {
-      results.push(await queueNewEntry(entry, scanMode));
+      results.push(await queueNewEntry(entry, scanMode, cveSkills));
     }
   }
 
@@ -300,10 +316,11 @@ const repoRescanSelect = {
 
 export async function enqueueRepoRescans(
   repoIds: string[],
-  options: { force?: boolean; scanMode?: ScanMode } = {},
+  options: { force?: boolean; scanMode?: ScanMode; cveSkills?: CveHuntSkill[] } = {},
 ): Promise<EnqueueScanResult> {
   const force = options.force ?? false;
   const scanMode = options.scanMode ?? 'both';
+  const cveSkills = scanMode === 'secrets' ? undefined : options.cveSkills;
   const results: EnqueueScanItemResult[] = [];
   const uniqueIds = [...new Set(repoIds)];
 
@@ -324,7 +341,7 @@ export async function enqueueRepoRescans(
       });
       continue;
     }
-    results.push(await queueExistingRepo(repo, force, scanMode));
+    results.push(await queueExistingRepo(repo, force, scanMode, cveSkills));
   }
 
   return {

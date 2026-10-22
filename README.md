@@ -34,6 +34,12 @@ docker-compose up --build
 | API | http://localhost:4000 |
 | API Health | http://localhost:4000/health |
 
+Scale the workers service when you need more parallel scans. The `workers` service publishes no host ports, so Compose can run multiple copies against the same Redis queues. Total parallel scans are `replicas × SCANNER_CONCURRENCY` (exploits: `replicas × EXPLOIT_CONCURRENCY`).
+
+```bash
+docker compose up -d --scale workers=3
+```
+
 ### 3. cursor-agent requirement
 
 The `workers` container needs the `cursor-agent` CLI binary available.
@@ -63,6 +69,36 @@ npm run db:push
 npm run dev:api      # http://localhost:4000
 npm run dev:workers
 npm run dev:ui       # http://localhost:3000
+```
+
+## Worker logs
+
+Workers write the same lines to stdout, to `workers.log`, and to the live stream on the Workers page.
+
+**UI.** Open http://localhost:3000/workers. The page tails the log file and streams new lines. The download button saves the full file.
+
+**Docker Compose.**
+
+```bash
+docker compose logs -f workers
+```
+
+With several replicas, that follows every `workers` container. To follow one of them:
+
+```bash
+docker compose logs -f workers-1
+```
+
+**On disk.** Compose mounts the log directory at `./volumes/logs/workers.log`:
+
+```bash
+tail -f volumes/logs/workers.log
+```
+
+When workers run via `npm run dev:workers`, the file is `./data/logs/workers.log` (or whatever `LOGS_DIR` resolves to). The API also serves the tail:
+
+```bash
+curl 'http://localhost:4000/api/workers/logs?tail=500'
 ```
 
 ## UI Navigation
@@ -101,6 +137,12 @@ Key variables:
 | `DATABASE_URL` | PostgreSQL connection string |
 | `REDIS_HOST` / `REDIS_PORT` | Redis connection |
 | `CURSOR_AGENT_BIN` | Path to cursor-agent binary |
+| `AGENT_RUNNER` | `cursor` or `claude` (default: cursor). Settings → Scanner overrides this |
+| `CLAUDE_AGENT_MODEL` | Model id for the Claude Agent SDK runner (default: `openai/glm-5.2`) |
+| `CLAUDE_AGENT_MAX_TURNS` | Max agent turns per skill run (default: 50) |
+| `CLAUDE_MAX_TOKENS` | Legacy; not used by the agent-sdk runner |
+| `ANTHROPIC_BASE_URL` | Optional Anthropic-compatible proxy URL for the Claude runner |
+| `ANTHROPIC_API_KEY` | Optional Claude API key. Omitted when empty |
 | `SCANNER_CONCURRENCY` | Parallel clone+scan workers (default: 3) |
 | `EXPLOIT_CONCURRENCY` | Parallel exploit-gen workers (default: 2) |
 | `EXPLOIT_MIN_SEVERITY` | Min severity to generate exploits (default: HIGH) |

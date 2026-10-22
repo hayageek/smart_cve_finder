@@ -7,15 +7,17 @@ import { Card } from '../../components/ui/Card.tsx';
 import { Badge } from '../../components/ui/Badge.tsx';
 import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
+import { CveSkillPicker } from '../../components/CveSkillPicker.tsx';
 import { api } from '../../lib/api.ts';
 import { cn } from '../../lib/utils.ts';
+import type { CveHuntSkill } from '@secscan/shared';
 
 type PackageType = 'git' | 'npm' | 'pip' | 'cargo' | 'go' | 'gem';
 type ScanMode = 'both' | 'cve' | 'secrets';
 
 const SCAN_MODES: { value: ScanMode; label: string; description: string }[] = [
   { value: 'both', label: 'Both', description: 'CVE hunt + secret scan' },
-  { value: 'cve', label: 'CVE Hunt', description: 'cve-ai-finder (default) or Semgrep + cve-pattern-hunter via CVE_SCAN_MODE' },
+  { value: 'cve', label: 'CVE Hunt', description: 'Choose one or more hunt skills below' },
   { value: 'secrets', label: 'Secrets', description: 'Gitleaks + TruffleHog + triage only' },
 ];
 
@@ -130,6 +132,7 @@ export default function Import() {
   const [entryVersion, setEntryVersion] = useState('');
   const [entryPrivate, setEntryPrivate] = useState(false);
   const [scanMode, setScanMode] = useState<ScanMode>('both');
+  const [cveSkills, setCveSkills] = useState<CveHuntSkill[]>(['cve-ai-finder']);
   const [forceRescan, setForceRescan] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -219,7 +222,11 @@ export default function Import() {
     try {
       let queued = 0;
       let skipped = 0;
-      const importOptions = { scanMode, force: forceRescan };
+      const importOptions = {
+        scanMode,
+        force: forceRescan,
+        ...(scanMode !== 'secrets' ? { cveSkills } : {}),
+      };
 
       if (hasFile) {
         const res = await api.importRepos(file!, importOptions) as { queued: number; skipped: number };
@@ -278,6 +285,15 @@ export default function Import() {
               </button>
             ))}
           </div>
+          {scanMode !== 'secrets' && (
+            <div className="mt-4">
+              <p className="text-sm font-semibold mb-1">CVE skills</p>
+              <p className="text-xs text-muted-foreground mb-2">
+                Select one or more. All runs every skill on the same job. <span className="font-mono">finding_origin</span> records which skill produced each row.
+              </p>
+              <CveSkillPicker value={cveSkills} onChange={setCveSkills} />
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm cursor-pointer mt-3">
             <input
               type="checkbox"

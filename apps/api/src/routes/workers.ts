@@ -2,6 +2,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
+import { buildWorkerConfigForClient } from '@secscan/shared';
 import { prisma } from '../db/client.js';
 import { config } from '../config.js';
 import { scanQueue, exploitQueue, getQueueStats } from '../queues/index.js';
@@ -10,10 +11,27 @@ import { readWorkerLogTail } from '../lib/parseWorkerLogs.js';
 
 const router = Router();
 
+function agentEnvDefaults() {
+  return {
+    runner: process.env.AGENT_RUNNER,
+    claudeModel: process.env.CLAUDE_AGENT_MODEL,
+    cursorModel: process.env.CURSOR_AGENT_MODEL ?? 'claude-sonnet-4-5',
+    baseUrl: process.env.ANTHROPIC_BASE_URL,
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  };
+}
+
+function nullIfBlank(value: string | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 router.get('/config', async (_req, res) => {
   try {
     const cfg = await prisma.workerConfig.findFirst();
-    res.json(cfg);
+    if (!cfg) return res.status(404).json({ error: 'Config not found' });
+    res.json(buildWorkerConfigForClient(cfg, agentEnvDefaults()));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -30,11 +48,18 @@ const configSchema = z.object({
   notifyWebhookUrl: z.string().url().nullable().optional(),
   notifyOnCritical: z.boolean().optional(),
   notifyOnScanComplete: z.boolean().optional(),
+  agentRunner: z.enum(['cursor', 'claude']).optional(),
+  claudeAgentModel: z.string().optional(),
+  anthropicBaseUrl: z.string().optional(),
+  anthropicApiKey: z.string().optional(),
 });
 
 router.patch('/config', async (req, res) => {
   try {
     const data = configSchema.parse(req.body);
+    if (data.claudeAgentModel !== undefined) data.claudeAgentModel = nullIfBlank(data.claudeAgentModel) as string | undefined;
+    if (data.anthropicBaseUrl !== undefined) data.anthropicBaseUrl = nullIfBlank(data.anthropicBaseUrl) as string | undefined;
+    if (data.anthropicApiKey !== undefined) data.anthropicApiKey = nullIfBlank(data.anthropicApiKey) as string | undefined;
     const cfg = await prisma.workerConfig.findFirst();
     if (!cfg) return res.status(404).json({ error: 'Config not found' });
 
@@ -42,7 +67,7 @@ router.patch('/config', async (req, res) => {
       where: { id: cfg.id },
       data,
     });
-    res.json(updated);
+    res.json(buildWorkerConfigForClient(updated, agentEnvDefaults()));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -173,14 +198,13 @@ router.delete('/logs', (_req, res) => {
   }
 });
 
-/** Wipe Redis queues and scan job history so all worker page counters return to zero. */
+/** Wipe Redis queue state only (Bull counters + waiting/active jobs). Scan history and findings stay in Postgres. */
 router.post('/queues/reset-all', async (_req, res) => {
   try {
     await Promise.all([
       scanQueue.obliterate({ force: true }),
       exploitQueue.obliterate({ force: true }),
     ]);
-    await prisma.scanJob.deleteMany();
     await prisma.repo.updateMany({
       where: { status: { in: ['cloning', 'scanning', 'exploiting'] } },
       data: { status: 'queued' },

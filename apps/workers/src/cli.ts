@@ -21,7 +21,8 @@
  *   --version <ver>           Package version for --source
  *
  * Shared options:
- *   --model   <model>         Cursor model ID (default: CURSOR_AGENT_MODEL env)
+ *   --model   <model>         Model id (default: CURSOR_AGENT_MODEL or CLAUDE_AGENT_MODEL)
+ *   --runner  cursor|claude   Agent runner (default: AGENT_RUNNER env)
  *   --api-key <key>           Cursor API key  (default: CURSOR_API_KEY env)
  *   --debug                   Print full SDK output text
  *
@@ -45,7 +46,7 @@ import path from 'path';
 import readline from 'readline';
 import { PrismaClient } from '@prisma/client';
 import { Queue } from 'bullmq';
-import { QUEUE_NAMES, type PackageType, type SecretFinding, type DroppedSecretFinding } from '@secscan/shared';
+import { QUEUE_NAMES, resolveAgentSettings, type PackageType, type SecretFinding, type DroppedSecretFinding } from '@secscan/shared';
 // Raise listener limit before the SDK loads (it adds AbortSignal listeners
 // for each concurrent run; the default of 10 is too low).
 setMaxListeners(100);
@@ -92,13 +93,23 @@ const log  = {
 
 function resolveCveScanMode(): CveScanMode {
   const mode = process.env.CVE_SCAN_MODE ?? 'ai-finder';
-  if (mode === 'ai-finder' || mode === 'semgrep-pattern-hunter') return mode;
+  if (
+    mode === 'ai-finder'
+    || mode === 'semgrep-pattern-hunter'
+    || mode === 'cve-variant-hunter'
+    || mode === 'sbom-vuln-mapper'
+  ) return mode;
   log.warn(`Invalid CVE_SCAN_MODE "${mode}", using ai-finder`);
   return 'ai-finder';
 }
 
 function cveSkillPath(mode: CveScanMode): string {
-  return mode === 'semgrep-pattern-hunter' ? '/cve-pattern-hunter' : '/cve-ai-finder';
+  switch (mode) {
+    case 'semgrep-pattern-hunter': return '/cve-pattern-hunter';
+    case 'cve-variant-hunter': return '/cve-variant-hunter';
+    case 'sbom-vuln-mapper': return '/sbom-vuln-mapper';
+    default: return '/cve-ai-finder';
+  }
 }
 
 // ── Arg parsing ───────────────────────────────────────────────────
@@ -143,11 +154,23 @@ function resolveFromRoot(p: string): string {
   return path.isAbsolute(p) ? p : path.resolve(repoRoot, p);
 }
 
+const runnerFlag = getFlag('--runner');
+const agentDefaults = resolveAgentSettings(null, {
+  runner: runnerFlag ?? process.env.AGENT_RUNNER,
+  claudeModel: process.env.CLAUDE_AGENT_MODEL,
+  cursorModel: process.env.CURSOR_AGENT_MODEL ?? 'claude-sonnet-4-5',
+  baseUrl: process.env.ANTHROPIC_BASE_URL,
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
 const opts = {
   type:         (getFlag('--type') ?? (target?.startsWith('http') ? 'git' : null)) as PackageType | null,
   source:       getFlag('--source'),
   version:      getFlag('--version'),
-  model:        getFlag('--model')       ?? process.env.CURSOR_AGENT_MODEL ?? 'claude-sonnet-4-5',
+  model:        getFlag('--model')       ?? agentDefaults.model,
+  runner:       agentDefaults.runner,
+  anthropicBaseUrl: agentDefaults.anthropicBaseUrl,
+  anthropicApiKey: agentDefaults.anthropicApiKey,
   apiKey:       getFlag('--api-key')     ?? process.env.CURSOR_API_KEY,
   skillsDir:    resolveFromRoot(getFlag('--skills-dir') ?? process.env.SKILLS_DIR    ?? 'skills'),
   skillsUrl:    getFlag('--skills-url')  ?? process.env.SKILLS_REPO_URL              ?? 'https://github.com/hayageek/security_skills',
@@ -166,7 +189,7 @@ const opts = {
 };
 
 // ── API key guard ─────────────────────────────────────────────────
-if (!opts.apiKey && command !== '--help' && command !== '-h' && command && command !== 'secrets') {
+if (opts.runner === 'cursor' && !opts.apiKey && command !== '--help' && command !== '-h' && command && command !== 'secrets') {
   console.error(
     `\x1b[33mWARN\x1b[0m  CURSOR_API_KEY is not set.\n` +
     `       Get your key at https://cursor.com/settings and add it to .env:\n` +
@@ -177,7 +200,7 @@ if (!opts.apiKey && command !== '--help' && command !== '-h' && command && comma
   // Continue — let the SDK throw its own error with context rather than fail silently.
 }
 
-if (!opts.apiKey && command === 'secrets' && !opts.gateOnly) {
+if (opts.runner === 'cursor' && !opts.apiKey && command === 'secrets' && !opts.gateOnly) {
   console.error(
     `\x1b[33mWARN\x1b[0m  CURSOR_API_KEY is not set — required for triage skill.\n` +
     `       Use --gate-only to test gitleaks + trufflehog without Cursor,\n` +
@@ -185,13 +208,27 @@ if (!opts.apiKey && command === 'secrets' && !opts.gateOnly) {
   );
 }
 
-/** Print the ── Cursor SDK … ── header before a skill run. */
+/** Print the agent header before a skill run. */
 function printSkillHeader(label: string, skillPath: string, cwd: string) {
-  log.raw(`\n${C.bold}── Cursor SDK (${label}) ${'─'.repeat(Math.max(0, 44 - label.length))}${C.reset}`);
-  log.raw(`  ${C.cyan}SKILL${C.reset} : ${skillPath}`);
-  log.raw(`  ${C.cyan}MODEL${C.reset} : ${opts.model}`);
-  log.raw(`  ${C.cyan}CWD${C.reset}   : ${cwd}`);
+  const url = opts.anthropicBaseUrl ?? '(not set)';
+  log.raw(`\n${C.bold}── Agent (${label}) ${'─'.repeat(Math.max(0, 48 - label.length))}${C.reset}`);
+  log.raw(`  ${C.cyan}SKILL${C.reset}  : ${skillPath}`);
+  log.raw(`  ${C.cyan}RUNNER${C.reset} : ${opts.runner}`);
+  log.raw(`  ${C.cyan}MODEL${C.reset}  : ${opts.model}`);
+  log.raw(`  ${C.cyan}URL${C.reset}    : ${url}`);
+  log.raw(`  ${C.cyan}CWD${C.reset}    : ${cwd}`);
   log.raw(`${C.bold}────────────────────────────────────────────────────────${C.reset}\n`);
+}
+
+function agentCallFields() {
+  return {
+    model: opts.model,
+    apiKey: opts.apiKey,
+    runner: opts.runner,
+    anthropicBaseUrl: opts.anthropicBaseUrl,
+    anthropicApiKey: opts.anthropicApiKey,
+    debug: opts.debug,
+  };
 }
 
 // ── CLI logger adapter ────────────────────────────────────────────
@@ -233,6 +270,7 @@ async function runScan() {
   log.raw(C.bold + '═'.repeat(60) + C.reset + '\n');
 
   const plog = makePipelineLogger();
+  const cveScanMode = resolveCveScanMode();
 
   // ── Acquire source ──────────────────────────────────────────────
   log.step('1/4  Acquiring source code');
@@ -244,6 +282,7 @@ async function runScan() {
         target,
         version:  opts.version,
         destDir:  workspacePath,
+        fullGitHistory: cveScanMode === 'cve-variant-hunter',
       },
       plog,
     );
@@ -260,7 +299,6 @@ async function runScan() {
 
   // ── Inject skills ───────────────────────────────────────────────
   log.step('2/4  Injecting skills');
-  const cveScanMode = resolveCveScanMode();
   await injectSkills(
     {
       workspacePath,
@@ -282,9 +320,7 @@ async function runScan() {
     ({ findings, drops } = await runCveScan(
       {
         cwd:              workspacePath,
-        model:            opts.model,
-        apiKey:           opts.apiKey,
-        debug:            opts.debug,
+        ...agentCallFields(),
         onChunk:          (chunk) => process.stdout.write(chunk),
         scanMode:         cveScanMode,
         semgrepEnabled:   process.env.CVE_SEMGREP_ENABLED !== 'false',
@@ -365,9 +401,7 @@ async function runScan() {
             vulnJson,
             cwd:     workspacePath,
             destDir: path.join(opts.reportsDir, (v as Record<string, unknown>).finding_id as string),
-            model:     opts.model,
-            apiKey:  opts.apiKey,
-            debug:   opts.debug,
+            ...agentCallFields(),
             onChunk: (chunk) => process.stdout.write(chunk),
           },
           plog,
@@ -586,9 +620,7 @@ async function runSecrets() {
     ({ findings, drops } = await runSecretScan(
       {
         cwd: workspacePath,
-        model: opts.model,
-        apiKey: opts.apiKey,
-        debug: opts.debug,
+        ...agentCallFields(),
         onChunk: (chunk) => process.stdout.write(chunk),
         gitleaksBin: opts.gitleaksBin,
         trufflehogBin: opts.trufflehogBin,
@@ -740,9 +772,7 @@ async function runExploit() {
         vulnJson,
         cwd:     workspacePath,
         destDir: exploitDestDir,
-        model:     opts.model,
-        apiKey:  opts.apiKey,
-        debug:   opts.debug,
+        ...agentCallFields(),
         onChunk: (chunk) => process.stdout.write(chunk),
       },
       plog,
@@ -967,7 +997,8 @@ Queue-exploit options:
   -y, --yes                    Skip confirmation prompt
 
 Shared options:
-  --model     <model>          Cursor model ID         (env: CURSOR_AGENT_MODEL, default: claude-sonnet-4-5)
+  --model     <model>          Model id                (env: CURSOR_AGENT_MODEL or CLAUDE_AGENT_MODEL)
+  --runner    cursor|claude    Agent runner            (env: AGENT_RUNNER, default: cursor)
   --api-key   <key>            Cursor API key          (env: CURSOR_API_KEY)
   --workspace <dir>            Working directory       (default: /tmp/secscan-cli)
   --skills-dir <dir>           Local skills folder     (env: SKILLS_DIR, default: ./skills)

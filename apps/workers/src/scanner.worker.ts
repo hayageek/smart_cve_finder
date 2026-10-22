@@ -1,6 +1,14 @@
 import { Worker, type Job } from 'bullmq';
 import { Queue } from 'bullmq';
-import { acquireSource, injectSkills, runCveScan, runSecretScan } from './pipeline.js';
+import {
+  acquireSource,
+  cveScanModesForJob,
+  findingOriginForScanMode,
+  injectSkills,
+  primarySkillForScanMode,
+  runCveScan,
+  runSecretScan,
+} from './pipeline.js';
 import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -19,6 +27,7 @@ import {
   type DroppedSecretFinding,
   type ScanMode,
   type WorkerConfig,
+  resolveAgentSettings,
   type PackageType,
 } from '@secscan/shared';
 import { config, redisOptions } from './config.js';
@@ -73,6 +82,45 @@ function metadataFromDropped(d: DroppedFinding): object {
   return {
     cwe: d.extra?.metadata?.cwe ?? d.cwe ?? 'UNKNOWN',
     ...(vulnType ? { vulnerability_type: vulnType } : {}),
+  };
+}
+
+const KNOWN_FINDING_ORIGINS = new Set([
+  'cve-ai-finder',
+  'cve-pattern-hunter',
+  'cve-variant-hunter',
+  'sbom-vuln-mapper',
+]);
+
+/** Keep a skill-emitted origin; fill it in when the model omitted it. */
+function stampFindingOrigin(meta: object | undefined, origin: string): object {
+  const next: Record<string, unknown> = { ...(meta as Record<string, unknown> | undefined) };
+  const current = next.finding_origin;
+  if (typeof current !== 'string' || !KNOWN_FINDING_ORIGINS.has(current)) {
+    next.finding_origin = origin;
+  }
+  if (next.schema_version == null) next.schema_version = '1.1';
+  return next;
+}
+
+function stampFinding(finding: VulnerabilityFinding, origin: string): VulnerabilityFinding {
+  return {
+    ...finding,
+    extra: {
+      ...finding.extra,
+      metadata: stampFindingOrigin(finding.extra.metadata as object, origin) as VulnerabilityFinding['extra']['metadata'],
+    },
+  };
+}
+
+function stampDrop(drop: DroppedFinding, origin: string): DroppedFinding {
+  const stamped = stampFindingOrigin(metadataFromDropped(drop), origin);
+  return {
+    ...drop,
+    metadata: stamped as DroppedFinding['metadata'],
+    extra: drop.extra
+      ? { ...drop.extra, metadata: stamped as NonNullable<DroppedFinding['extra']>['metadata'] }
+      : drop.extra,
   };
 }
 
@@ -139,8 +187,11 @@ function sourceAcquisitionFromJob(job: ScanJobData): SourceAcquisitionInfo {
 export const scanWorker = new Worker<ScanJobData>(
   QUEUE_NAMES.REPO_SCAN,
   async (job: Job<ScanJobData>) => {
-    const { repoUrl, packageType, packageName, packageVersion, scanJobId, forceRescan, scanMode: jobScanMode } = job.data;
+    const { repoUrl, packageType, packageName, packageVersion, scanJobId, forceRescan, scanMode: jobScanMode, cveSkill, cveSkills } = job.data;
     const scanMode = resolveScanMode(jobScanMode);
+    const cveScanModes = cveScanModesForJob(cveSkills ?? cveSkill, config.CVE_SCAN_MODE);
+    const findingOrigin = findingOriginForScanMode(cveScanModes[0]);
+    const fullGitHistory = cveScanModes.includes('cve-variant-hunter');
     let runCve = scanMode === 'both' || scanMode === 'cve';
     let runSecrets = scanMode === 'both' || scanMode === 'secrets';
     const jobLog = log.child({ jobId: job.id, scanJobId, repoUrl, packageType });
@@ -157,6 +208,9 @@ export const scanWorker = new Worker<ScanJobData>(
         packageVersion: packageVersion ?? null,
         forceRescan:    forceRescan ?? false,
         scanMode,
+        cveSkill:       cveSkill ?? null,
+        cveSkills:      cveSkills ?? null,
+        cveScanModes,
         attemptsMade:   job.attemptsMade,
         processCwd:     process.cwd(),
         WORKSPACES_DIR: config.WORKSPACES_DIR,
@@ -286,7 +340,8 @@ export const scanWorker = new Worker<ScanJobData>(
             target: sourceAcquisition.target,
             version: sourceAcquisition.version,
             destDir: workspacePath,
-            gitDepth: config.GIT_CLONE_DEPTH,
+            gitDepth: fullGitHistory ? 0 : config.GIT_CLONE_DEPTH,
+            fullGitHistory,
           },
           pipelineLog,
         );
@@ -378,14 +433,14 @@ export const scanWorker = new Worker<ScanJobData>(
       await updateScanJob(prisma, scanJobId, { status: 'scanning', stage: 'scan' });
       await prisma.repo.update({ where: { url: repoUrl }, data: { status: 'scanning' } });
 
-      jobLog.info({ workspacePath, skillsDir: config.SKILLS_DIR, cveScanMode: config.CVE_SCAN_MODE }, 'scanner.worker: injecting security skills');
+      jobLog.info({ workspacePath, skillsDir: config.SKILLS_DIR, cveScanModes, cveSkills: cveSkills ?? cveSkill ?? null }, 'scanner.worker: injecting security skills');
       await injectSkills(
         {
           workspacePath,
           skillsDir:     config.SKILLS_DIR,
           skillsRepoUrl: config.SKILLS_REPO_URL,
           tmpDir:        config.WORKSPACES_DIR,
-          cveScanMode:   config.CVE_SCAN_MODE,
+          cveScanModes,
         },
         pipelineLog,
       );
@@ -399,50 +454,92 @@ export const scanWorker = new Worker<ScanJobData>(
       let secretDrops: DroppedSecretFinding[] = [];
       let rawSecretOutput = '';
 
+      const workerCfg = (await prisma.workerConfig.findFirst()) as WorkerConfig | null;
+      const agent = resolveAgentSettings(workerCfg, {
+        runner: config.AGENT_RUNNER,
+        claudeModel: config.CLAUDE_AGENT_MODEL,
+        cursorModel: config.CURSOR_AGENT_MODEL,
+        baseUrl: config.ANTHROPIC_BASE_URL,
+        apiKey: config.ANTHROPIC_API_KEY,
+      });
+      jobLog.info(
+        {
+          runner: agent.runner,
+          model: agent.model,
+          url: agent.anthropicBaseUrl ?? '(not set)',
+        },
+        'scanner.worker: agent runner',
+      );
+
       const cveScanPromise = runCve
         ? (async () => {
-            jobLog.info(
-              {
-                skill: config.CVE_SCAN_MODE === 'semgrep-pattern-hunter' ? '/cve-pattern-hunter' : '/cve-ai-finder',
-                cveScanMode: config.CVE_SCAN_MODE,
-                cwd: workspacePath,
-                model: config.CURSOR_AGENT_MODEL,
-              },
-              'scanner.worker: starting CVE scan',
-            );
-            try {
-              return await runCveScan(
+            const mergedFindings: VulnerabilityFinding[] = [];
+            const mergedDrops: DroppedFinding[] = [];
+            const rawParts: string[] = [];
+            for (const mode of cveScanModes) {
+              const origin = findingOriginForScanMode(mode);
+              jobLog.info(
                 {
+                  skill: `/${primarySkillForScanMode(mode)}`,
+                  cveScanMode: mode,
+                  findingOrigin: origin,
                   cwd: workspacePath,
-                  model: config.CURSOR_AGENT_MODEL,
-                  apiKey: config.CURSOR_API_KEY,
-                  debug: config.DEBUG_CURSOR,
-                  scanMode: config.CVE_SCAN_MODE,
-                  semgrepEnabled: config.CVE_SEMGREP_ENABLED,
-                  semgrepBin: config.CVE_SEMGREP_BIN,
-                  semgrepJobs: config.CVE_SEMGREP_JOBS,
+                  runner: agent.runner,
+                  model: agent.model,
+                  url: agent.anthropicBaseUrl ?? '(not set)',
                 },
-                pipelineLog,
+                'scanner.worker: starting CVE scan',
               );
-            } catch (err: unknown) {
-              const execErr = err as { message?: string };
-              throw new Error(`CVE scan failed (${config.CVE_SCAN_MODE}): ${execErr.message}`);
+              try {
+                const result = await runCveScan(
+                  {
+                    cwd: workspacePath,
+                    model: agent.model,
+                    apiKey: config.CURSOR_API_KEY,
+                    runner: agent.runner,
+                    anthropicBaseUrl: agent.anthropicBaseUrl,
+                    anthropicApiKey: agent.anthropicApiKey,
+                    debug: config.DEBUG_CURSOR,
+                    scanMode: mode,
+                    semgrepEnabled: config.CVE_SEMGREP_ENABLED,
+                    semgrepBin: config.CVE_SEMGREP_BIN,
+                    semgrepJobs: config.CVE_SEMGREP_JOBS,
+                  },
+                  pipelineLog,
+                );
+                mergedFindings.push(...result.findings.map((finding) => stampFinding(finding, origin)));
+                mergedDrops.push(...result.drops.map((drop) => stampDrop(drop, origin)));
+                if (result.rawOutput) rawParts.push(result.rawOutput);
+              } catch (err: unknown) {
+                const execErr = err as { message?: string };
+                throw new Error(`CVE scan failed (${mode}): ${execErr.message}`);
+              }
             }
+            return { findings: mergedFindings, drops: mergedDrops, rawOutput: rawParts.join('\n\n') };
           })()
-        : Promise.resolve({ findings: [], drops: [], rawOutput: '' });
+        : Promise.resolve({ findings: [] as VulnerabilityFinding[], drops: [] as DroppedFinding[], rawOutput: '' });
 
       const secretScanPromise = runSecrets
         ? (async () => {
             jobLog.info(
-              { skill: '/secret-finding-triage', cwd: workspacePath },
+              {
+                skill: '/secret-finding-triage',
+                cwd: workspacePath,
+                runner: agent.runner,
+                model: agent.model,
+                url: agent.anthropicBaseUrl ?? '(not set)',
+              },
               'scanner.worker: starting secret scan',
             );
             try {
               return await runSecretScan(
                 {
                   cwd: workspacePath,
-                  model: config.CURSOR_AGENT_MODEL,
+                  model: agent.model,
                   apiKey: config.CURSOR_API_KEY,
+                  runner: agent.runner,
+                  anthropicBaseUrl: agent.anthropicBaseUrl,
+                  anthropicApiKey: agent.anthropicApiKey,
                   debug: config.DEBUG_CURSOR,
                   gitleaksBin: config.SECRET_GITLEAKS_BIN,
                   trufflehogBin: config.SECRET_TRUFFLEHOG_BIN,
@@ -537,7 +634,6 @@ export const scanWorker = new Worker<ScanJobData>(
       }) : [];
       secretFindings = validatedSecrets;
 
-      const workerCfg = (await prisma.workerConfig.findFirst()) as WorkerConfig | null;
       const autoQueue = workerCfg?.autoQueueExploits ?? false;
       const minSeverity = workerCfg?.exploitMinSeverity ?? config.EXPLOIT_MIN_SEVERITY;
       const includeDropped = workerCfg?.exploitIncludeDropped ?? config.EXPLOIT_INCLUDE_DROPPED;
@@ -558,7 +654,7 @@ export const scanWorker = new Worker<ScanJobData>(
                     cwe: f.extra.metadata.cwe,
                     vulnType: f.extra.metadata.vulnerability_type,
                     message: f.extra.message,
-                    metadataJson: f.extra.metadata as object,
+                    metadataJson: stampFindingOrigin(f.extra.metadata as object, findingOrigin),
                   }),
                 },
               }),
@@ -584,7 +680,7 @@ export const scanWorker = new Worker<ScanJobData>(
                     cwe,
                     vulnType: String(meta?.vulnerability_type ?? d.vulnerability_type ?? '') || null,
                     message: String(d.extra?.message ?? d.message ?? '') || null,
-                    metadataJson: metadataFromDropped(d),
+                    metadataJson: stampFindingOrigin(metadataFromDropped(d), findingOrigin),
                   }),
                   dropped: true,
                   dropReason: d.drop_reason,

@@ -9,8 +9,10 @@ import { Input } from '../../components/ui/Input.tsx';
 import { Select } from '../../components/ui/Select.tsx';
 import { Badge, StatusBadge } from '../../components/ui/Badge.tsx';
 import { ConfirmDialog } from '../../components/ui/Dialog.tsx';
+import { CveSkillPicker } from '../../components/CveSkillPicker.tsx';
 import { api } from '../../lib/api.ts';
 import { formatRelative, cn } from '../../lib/utils.ts';
+import type { CveHuntSkill } from '@secscan/shared';
 
 type ScanMode = 'both' | 'cve' | 'secrets';
 
@@ -130,6 +132,7 @@ export default function AllRepos() {
   const [visibility, setVisibility] = useState('all');
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [bulkScanMode, setBulkScanMode] = useState<ScanMode>('both');
+  const [bulkCveSkills, setBulkCveSkills] = useState<CveHuntSkill[]>(['cve-ai-finder']);
   const [bulkForce, setBulkForce] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ queued: number; skipped: number } | null>(null);
 
@@ -159,7 +162,11 @@ export default function AllRepos() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['repos'] }),
   });
 
-  const scanOptions = { scanMode: bulkScanMode, force: bulkForce };
+  const scanOptions = {
+    scanMode: bulkScanMode,
+    force: bulkForce,
+    ...(bulkScanMode !== 'secrets' ? { cveSkills: bulkCveSkills } : {}),
+  };
 
   const bulkRescan = useMutation({
     mutationFn: (ids: string[]) => api.rescanReposBulk(ids, scanOptions),
@@ -350,6 +357,9 @@ export default function AllRepos() {
                 <option key={m.value} value={m.value}>{m.label}</option>
               ))}
             </Select>
+            {bulkScanMode !== 'secrets' && (
+              <CveSkillPicker compact value={bulkCveSkills} onChange={setBulkCveSkills} />
+            )}
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="checkbox"

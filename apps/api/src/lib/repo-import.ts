@@ -1,4 +1,5 @@
 import {
+  type CveHuntSkill,
   type PackageType,
   type RegistryPackageType,
   type ScanMode,
@@ -55,9 +56,26 @@ export function entryToCreateData(entry: ParsedEntry) {
   };
 }
 
-export function entryToScanJobPayload(entry: ParsedEntry, scanJobId: string, scanMode: ScanMode = 'both') {
+/** Persist a skill list in the existing ScanJob.cveSkill string and on the queue payload. */
+export function cveSkillJobFields(cveSkills?: CveHuntSkill[]) {
+  if (!cveSkills?.length) {
+    return { stored: null as string | null, payload: {} as { cveSkill?: CveHuntSkill; cveSkills?: CveHuntSkill[] } };
+  }
+  return {
+    stored: cveSkills.join(','),
+    payload: { cveSkill: cveSkills[0], cveSkills },
+  };
+}
+
+export function entryToScanJobPayload(
+  entry: ParsedEntry,
+  scanJobId: string,
+  scanMode: ScanMode = 'both',
+  cveSkills?: CveHuntSkill[],
+) {
+  const skill = cveSkillJobFields(cveSkills).payload;
   if (entry.packageType === 'git') {
-    return { repoUrl: entry.url, packageType: 'git' as const, scanJobId, scanMode };
+    return { repoUrl: entry.url, packageType: 'git' as const, scanJobId, scanMode, ...skill };
   }
   return {
     repoUrl: entry.url,
@@ -66,6 +84,7 @@ export function entryToScanJobPayload(entry: ParsedEntry, scanJobId: string, sca
     packageVersion: entry.packageVersion,
     scanJobId,
     scanMode,
+    ...skill,
   };
 }
 

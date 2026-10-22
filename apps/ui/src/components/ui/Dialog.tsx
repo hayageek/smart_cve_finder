@@ -4,8 +4,17 @@ import { Button } from './Button.tsx';
 import { Input } from './Input.tsx';
 import { cn } from '../../lib/utils.ts';
 
-export const VULN_DETAIL_MODAL_SIZE_KEY = 'secscan:vuln-detail-modal-size';
-export const REPORT_VIEWER_MODAL_SIZE_KEY = 'secscan:report-viewer-modal-size';
+export const VULN_DETAIL_MODAL_SIZE_KEY = 'secscan:vuln-detail-modal-size-v2';
+export const REPORT_VIEWER_MODAL_SIZE_KEY = 'secscan:report-viewer-modal-size-v2';
+
+/** Default detail dialog: 80% of the browser window. */
+export function viewportModalSize(fraction = 0.8): ModalSize {
+  if (typeof window === 'undefined') return { width: 960, height: 720 };
+  return {
+    width: Math.round(window.innerWidth * fraction),
+    height: Math.round(window.innerHeight * fraction),
+  };
+}
 
 export interface ModalSize {
   width: number;
@@ -140,7 +149,7 @@ export function Modal({
   stacked,
   resizable = false,
   sizeStorageKey,
-  defaultSize = { width: 768, height: 560 },
+  defaultSize = viewportModalSize(0.8),
   sizeConstraints,
 }: ModalProps) {
   const { size, startResize } = usePersistedModalSize(

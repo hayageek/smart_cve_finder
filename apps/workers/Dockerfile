@@ -33,9 +33,14 @@ FROM node:24-slim AS runner
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git openssl ca-certificates curl unzip tar ripgrep python3 python3-pip python3-venv \
+    git openssl ca-certificates curl unzip tar ripgrep jq \
+    python3 python3-pip python3-venv \
+    build-essential pkg-config libssl-dev \
+    && python3 -c "import tomllib" \
+    && python3 -m pip install --no-cache-dir --break-system-packages tomli \
     && python3 -m venv /opt/semgrep \
-    && /opt/semgrep/bin/pip install --no-cache-dir semgrep \
+    && /opt/semgrep/bin/pip install --no-cache-dir semgrep pip-audit \
+    && ln -sf /opt/semgrep/bin/pip-audit /usr/local/bin/pip-audit \
     && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
 # Gitleaks + TruffleHog for secret scanning
@@ -53,7 +58,48 @@ RUN case "${TARGETARCH}" in \
       | tar xz -C /usr/local/bin trufflehog \
     && gitleaks version \
     && trufflehog --version
-ENV PATH="/opt/semgrep/bin:${PATH}"
+
+# sbom-vuln-mapper + cve-variant-hunter toolchain.
+# npm ships with the Node image. tomllib is the Python 3.11+ stdlib (tomli is the fallback).
+# jq filters osv-scanner output. gh enriches advisories. cargo-audit is the `cargo audit` subcommand.
+ARG GH_VERSION=2.103.0
+ARG OSV_SCANNER_VERSION=2.7.0
+ARG GO_VERSION=1.27.3
+ARG GOVULNCHECK_VERSION=v1.9.0
+RUN case "${TARGETARCH}" in \
+      amd64) GH_ARCH=amd64; OSV_ARCH=amd64; GO_ARCH=amd64 ;; \
+      arm64) GH_ARCH=arm64; OSV_ARCH=arm64; GO_ARCH=arm64 ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}"; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz" \
+      | tar xz -C /tmp \
+    && mv /tmp/gh_${GH_VERSION}_linux_${GH_ARCH}/bin/gh /usr/local/bin/gh \
+    && rm -rf /tmp/gh_${GH_VERSION}_linux_${GH_ARCH} \
+    && curl -fsSL -o /usr/local/bin/osv-scanner \
+      "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_${OSV_ARCH}" \
+    && chmod +x /usr/local/bin/osv-scanner \
+    && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
+      | tar xz -C /usr/local \
+    && GOBIN=/usr/local/bin /usr/local/go/bin/go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} \
+    && rm -rf /root/go/pkg /root/.cache/go-build \
+    && curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain stable \
+    && . /root/.cargo/env \
+    && cargo install cargo-audit --locked \
+    && gh --version \
+    && osv-scanner --version \
+    && npm --version \
+    && pip-audit --version \
+    && cargo --version \
+    && cargo audit --version \
+    && govulncheck -version \
+    && python3 -c "import tomllib, tomli; print('tomllib', tomllib.__name__)" \
+    && jq --version
+
+ENV PATH="/usr/local/go/bin:/root/.cargo/bin:/opt/semgrep/bin:${PATH}"
+ENV GOPATH=/root/go
+ENV CARGO_HOME=/root/.cargo
+ENV RUSTUP_HOME=/root/.rustup
 
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/packages ./packages

@@ -56,6 +56,8 @@ model ScanJob {
   stage        String?
   // cve | secrets | both
   scanMode     String          @default("both")
+  // Comma-separated cve-ai-finder, cve-variant-hunter, sbom-vuln-mapper (null → worker default)
+  cveSkill     String?
   startedAt    DateTime?
   finishedAt   DateTime?
   error        String?
@@ -162,5 +164,11 @@ model WorkerConfig {
   notifyWebhookUrl      String?
   notifyOnCritical      Boolean  @default(true)
   notifyOnScanComplete  Boolean  @default(false)
+  // null = use AGENT_RUNNER / CLAUDE_AGENT_MODEL / ANTHROPIC_* from the environment.
+  // Empty string for the Anthropic fields means explicitly unset (do not send them).
+  agentRunner           String?
+  claudeAgentModel      String?
+  anthropicBaseUrl      String?
+  anthropicApiKey       String?
   updatedAt             DateTime @updatedAt
 }

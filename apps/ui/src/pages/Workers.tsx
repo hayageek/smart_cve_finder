@@ -10,7 +10,7 @@ import { Select } from '../components/ui/Select.tsx';
 import { useLiveQueueStats, useWorkerLogs } from '../hooks/useSocket.ts';
 import { api } from '../lib/api.ts';
 import { cn } from '../lib/utils.ts';
-import type { WorkerConfig } from '@secscan/shared';
+import type { WorkerConfigView } from '@secscan/shared';
 
 function WorkerPanel({ type, paused, stats, pipeline, concurrency, onConcurrencyChange, onPause, onResume, onDrain }: {
   type: 'scanner' | 'exploit';
@@ -112,7 +112,7 @@ export default function Workers() {
 
   const { data: config, refetch: refetchConfig } = useQuery({
     queryKey: ['worker-config'],
-    queryFn: () => api.getWorkerConfig() as Promise<WorkerConfig>,
+    queryFn: () => api.getWorkerConfig() as Promise<WorkerConfigView>,
   });
 
   const [scannerConc, setScannerConc] = useState(3);
@@ -223,15 +223,15 @@ export default function Workers() {
             <div>
               <CardTitle>Reset queue statistics</CardTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Clear scanner and exploit Redis queues and delete scan job history so every counter on this page returns to zero.
+                Clear scanner and exploit Redis queues so every counter on this page returns to zero. Scan history and findings in the database are kept.
               </p>
             </div>
             <ConfirmDialog
               title="Reset all queues"
               description={
-                'This permanently clears both worker queues (waiting, active, completed, and failed counts) ' +
-                'and deletes all scan job records so pipeline counters reset to zero. Repos stuck mid-scan are set back to queued. ' +
-                'Vulnerabilities and secrets tied to deleted scan jobs are removed. Running worker jobs may error; restart workers if needed. This cannot be undone.'
+                'This permanently clears both worker Redis queues (waiting, active, completed, and failed counts). ' +
+                'Scan jobs, vulnerabilities, and secrets in the database are not deleted. Repos stuck mid-scan are set back to queued. ' +
+                'Running worker jobs may error; restart workers if needed. To wipe scan history and findings, use Settings → Clear Data.'
               }
               confirmText="Reset all queues"
               requireTyped="RESET"
@@ -244,6 +244,37 @@ export default function Workers() {
               )}
             </ConfirmDialog>
           </CardHeader>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Agent (effective)</CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              What workers use after merging database settings with .env. Edit on Settings → Scanner.
+            </p>
+          </CardHeader>
+          <CardContent className="text-sm space-y-2">
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Runner</span>
+              <span className="font-mono text-xs">{config?.agentRunner ?? '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Claude model</span>
+              <span className="font-mono text-xs break-all text-right">{config?.claudeAgentModel ?? '—'}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">ANTHROPIC_BASE_URL</span>
+              <span className="font-mono text-xs break-all text-right max-w-[60%]">
+                {config?.anthropicBaseUrl || (config?.anthropicBaseUrlFromEnv ? '(from .env)' : '—')}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">ANTHROPIC_API_KEY</span>
+              <span className="font-mono text-xs">
+                {config?.anthropicApiKeyConfigured ? (config.anthropicApiKeyFromEnv ? 'Set (.env)' : 'Set (DB)') : 'Not set'}
+              </span>
+            </div>
+          </CardContent>
         </Card>
 
         <Card>

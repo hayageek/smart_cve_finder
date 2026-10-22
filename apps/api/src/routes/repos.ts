@@ -4,6 +4,7 @@ import { parse } from 'csv-parse/sync';
 import { prisma } from '../db/client.js';
 import { enqueueScanJob, isRepoActivelyScanning, isRepoInScanPipeline } from '../lib/scan-queue.js';
 import {
+  cveSkillJobFields,
   detectGitProvider,
   entryToCreateData,
   entryToScanJobPayload,
@@ -17,7 +18,7 @@ import { enqueueRepoRescans, enqueueScans } from '../services/scans.js';
 import { emitActivityEvent } from '../sockets/index.js';
 import { evaluateRevisionGate } from '@secscan/source-revision';
 import { config } from '../config.js';
-import { REGISTRY_PACKAGE_TYPES, type PackageType, type ScanMode } from '@secscan/shared';
+import { CVE_HUNT_SKILLS, parseCveSkillList, REGISTRY_PACKAGE_TYPES, type CveHuntSkill, type PackageType, type ScanMode } from '@secscan/shared';
 import { z } from 'zod';
 
 const router = Router();
@@ -89,16 +90,28 @@ router.post('/import/manual/preview', async (req, res) => {
 });
 
 const scanModeSchema = z.enum(['both', 'cve', 'secrets']).default('both');
+const cveSkillsSchema = z.union([
+  z.array(z.enum(CVE_HUNT_SKILLS)).min(1),
+  z.string().min(1),
+]).optional();
+
+function selectedCveSkills(body: { cveSkill?: string; cveSkills?: string | CveHuntSkill[] }): CveHuntSkill[] | undefined {
+  const parsed = parseCveSkillList(body.cveSkills ?? body.cveSkill);
+  return parsed.length ? parsed : undefined;
+}
 
 router.post('/import/manual', async (req, res) => {
   try {
     const body = z.object({
       targets: z.array(scanTargetSchema).min(1),
       scanMode: scanModeSchema.optional(),
+      cveSkill: z.string().optional(),
+      cveSkills: cveSkillsSchema,
       force: z.boolean().optional(),
     }).parse(req.body);
     const result = await enqueueScans(body.targets, {
       scanMode: body.scanMode,
+      cveSkills: selectedCveSkills(body),
       force: body.force,
     });
     res.json({ queued: result.queued, skipped: result.skipped, results: result.results });
@@ -127,6 +140,8 @@ router.post('/import', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const importBody = z.object({
       scanMode: scanModeSchema.optional(),
+      cveSkill: z.string().optional(),
+      cveSkills: cveSkillsSchema,
       force: z
         .string()
         .optional()
@@ -142,6 +157,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
 
     const result = await enqueueScans(unique.map(parsedEntryToScanTarget), {
       scanMode,
+      cveSkills: selectedCveSkills(importBody),
       force: importBody.force,
     });
     console.info(
@@ -248,11 +264,14 @@ router.post('/rescan', async (req, res) => {
     const body = z.object({
       ids: z.array(z.string().min(1)).min(1),
       scanMode: scanModeSchema.optional(),
+      cveSkill: z.string().optional(),
+      cveSkills: cveSkillsSchema,
       force: z.boolean().optional(),
     }).parse(req.body);
 
     const result = await enqueueRepoRescans(body.ids, {
       scanMode: body.scanMode,
+      cveSkills: selectedCveSkills(body),
       force: body.force,
     });
 
@@ -278,6 +297,8 @@ router.post('/rescan-all', async (req, res) => {
   try {
     const body = z.object({
       scanMode: scanModeSchema.optional(),
+      cveSkill: z.string().optional(),
+      cveSkills: cveSkillsSchema,
       force: z.boolean().optional(),
       /** When true, apply list filters below; otherwise queue every repo in the database. */
       useFilters: z.boolean().optional(),
@@ -306,7 +327,7 @@ router.post('/rescan-all', async (req, res) => {
 
     const result = await enqueueRepoRescans(
       repos.map((r) => r.id),
-      { scanMode: body.scanMode, force: body.force },
+      { scanMode: body.scanMode, cveSkills: selectedCveSkills(body), force: body.force },
     );
 
     console.info(
@@ -352,6 +373,8 @@ router.post('/:id/rescan', async (req, res) => {
 
     const body = z.object({
       scanMode: scanModeSchema.optional(),
+      cveSkill: z.string().optional(),
+      cveSkills: cveSkillsSchema,
       /** Bypass revision check and re-scan even when commit/version unchanged. */
       force: z.boolean().optional(),
     }).parse(req.body ?? {});
@@ -385,7 +408,10 @@ router.post('/:id/rescan', async (req, res) => {
       }
     }
 
-    const scanJob = await prisma.scanJob.create({ data: { repoId: repo.id, status: 'pending', scanMode } });
+    const skill = cveSkillJobFields(scanMode === 'secrets' ? undefined : selectedCveSkills(body));
+    const scanJob = await prisma.scanJob.create({
+      data: { repoId: repo.id, status: 'pending', scanMode, cveSkill: skill.stored },
+    });
     const result = await enqueueScanJob(repo.id, {
       repoUrl: repo.url,
       packageType: (repo.packageType as PackageType) ?? 'git',
@@ -393,6 +419,7 @@ router.post('/:id/rescan', async (req, res) => {
       packageVersion: repo.packageVersion ?? undefined,
       scanJobId: scanJob.id,
       scanMode,
+      ...skill.payload,
       ...(force ? { forceRescan: true } : {}),
     });
 

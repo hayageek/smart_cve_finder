@@ -13,9 +13,25 @@ import { DroppedVulnDetail } from '../../components/DroppedVulnDetail.tsx';
 import { api } from '../../lib/api.ts';
 import { RepoUrlLink } from '../../components/RepoUrlLink.tsx';
 import { formatDate, formatFileLine, formatVulnIdShort } from '../../lib/utils.ts';
-import type { ApiVulnerability } from '@secscan/shared';
+import { FINDING_ORIGINS, type ApiVulnerability } from '@secscan/shared';
+import { findingOriginLabel } from '../../components/FindingSkillMeta.tsx';
 
-const DROP_REASONS = ['severity-below-high', 'excluded-path', 'false-positive-heuristic', 'low-confidence'];
+const DROP_REASONS = [
+  'severity-below-high',
+  'excluded-path',
+  'false-positive-heuristic',
+  'low-confidence',
+  'sanitizer-present',
+  'weak-evidence',
+  'fix-complete',
+  'no-variant-found',
+  'no-git-history',
+  'seed-unresolvable',
+  'no-first-party-import',
+  'vulnerable-symbol-unused',
+  'not-reachable',
+  'dev-dependency-only',
+];
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
@@ -29,6 +45,7 @@ export default function Dropped() {
   const [cwe, setCwe] = useState('');
   const [vulnType, setVulnType] = useState('');
   const [search, setSearch] = useState('');
+  const [findingOrigin, setFindingOrigin] = useState('');
   const [selected, setSelected] = useState<ApiVulnerability | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
@@ -43,7 +60,7 @@ export default function Dropped() {
   }, []);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dropped-vulns', page, pageSize, dropReason, severity, cwe, vulnType, search],
+    queryKey: ['dropped-vulns', page, pageSize, dropReason, severity, cwe, vulnType, search, findingOrigin],
     queryFn: () => api.getDroppedVulns({
       page,
       pageSize,
@@ -52,6 +69,7 @@ export default function Dropped() {
       ...(severity ? { severity } : {}),
       ...(cwe ? { cwe } : {}),
       ...(vulnType ? { vulnType } : {}),
+      ...(findingOrigin ? { findingOrigin } : {}),
     }),
     placeholderData: (prev) => prev,
   }) as { data: { data: ApiVulnerability[]; total: number; totalPages: number } | undefined; isLoading: boolean };
@@ -123,6 +141,16 @@ export default function Dropped() {
       <RepoUrlLink repoUrl={row.original.repoUrl} display="table" />
     ) },
     { header: 'CWE', cell: ({ row }) => <span className="font-mono text-xs">{row.original.cwe}</span> },
+    {
+      header: 'Origin',
+      cell: ({ row }) => (
+        <span className="text-xs whitespace-nowrap">{findingOriginLabel(
+          typeof row.original.metadataJson?.finding_origin === 'string'
+            ? row.original.metadataJson.finding_origin
+            : null,
+        )}</span>
+      ),
+    },
     { header: 'Severity', cell: ({ row }) => <SeverityBadge severity={row.original.severity} /> },
     { header: 'File:Line', cell: ({ row }) => (
       <span
@@ -188,6 +216,12 @@ export default function Dropped() {
           <Input placeholder="Filter by repo..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} className="max-w-xs" />
           <Input placeholder="Filter by CWE..." value={cwe} onChange={(e) => { setCwe(e.target.value); setPage(1); }} className="max-w-[140px]" />
           <Input placeholder="Filter by type..." value={vulnType} onChange={(e) => { setVulnType(e.target.value); setPage(1); }} className="max-w-[160px]" />
+          <Select value={findingOrigin} onChange={(e) => { setFindingOrigin(e.target.value); setPage(1); }}>
+            <option value="">All origins</option>
+            {FINDING_ORIGINS.map((origin) => (
+              <option key={origin} value={origin}>{findingOriginLabel(origin)}</option>
+            ))}
+          </Select>
           <Select value={severity} onChange={(e) => { setSeverity(e.target.value); setPage(1); }}>
             <option value="">All severities</option>
             {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
